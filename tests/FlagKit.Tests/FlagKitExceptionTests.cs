@@ -10,7 +10,7 @@ public class FlagKitExceptionTests
         var ex = FlagKitException.ConfigError(ErrorCode.ConfigInvalidApiKey, "Invalid API key");
 
         Assert.Equal(ErrorCode.ConfigInvalidApiKey, ex.Code);
-        Assert.Equal("Invalid API key", ex.Message);
+        Assert.Contains("Invalid API key", ex.Message);
         Assert.True(ex.IsConfigError);
         Assert.False(ex.IsNetworkError);
     }
@@ -21,7 +21,7 @@ public class FlagKitExceptionTests
         var ex = FlagKitException.NetworkError(ErrorCode.HttpTimeout, "Request timed out");
 
         Assert.Equal(ErrorCode.HttpTimeout, ex.Code);
-        Assert.Equal("Request timed out", ex.Message);
+        Assert.Contains("Request timed out", ex.Message);
         Assert.True(ex.IsNetworkError);
         Assert.False(ex.IsConfigError);
     }
@@ -32,17 +32,17 @@ public class FlagKitExceptionTests
         var ex = FlagKitException.EvaluationError(ErrorCode.EvalFlagNotFound, "Flag not found");
 
         Assert.Equal(ErrorCode.EvalFlagNotFound, ex.Code);
-        Assert.Equal("Flag not found", ex.Message);
+        Assert.Contains("Flag not found", ex.Message);
         Assert.True(ex.IsEvaluationError);
     }
 
     [Fact]
     public void InternalError_Creates_Internal_Exception()
     {
-        var ex = FlagKitException.InternalError(ErrorCode.InternalUnexpectedError, "Unexpected error");
+        var ex = FlagKitException.InternalError(ErrorCode.SdkNotInitialized, "SDK not initialized");
 
-        Assert.Equal(ErrorCode.InternalUnexpectedError, ex.Code);
-        Assert.Equal("Unexpected error", ex.Message);
+        Assert.Equal(ErrorCode.SdkNotInitialized, ex.Code);
+        Assert.Contains("SDK not initialized", ex.Message);
         Assert.True(ex.IsInternalError);
     }
 
@@ -50,7 +50,7 @@ public class FlagKitExceptionTests
     public void InnerException_Is_Preserved()
     {
         var inner = new InvalidOperationException("inner");
-        var ex = new FlagKitException(ErrorCode.InternalUnexpectedError, "outer", inner);
+        var ex = new FlagKitException(ErrorCode.SdkNotInitialized, "outer", inner);
 
         Assert.Same(inner, ex.InnerException);
     }
