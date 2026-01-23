@@ -51,7 +51,6 @@ FlagKit.Close();
 var client = FlagKit.Initialize("sdk_your_api_key", builder =>
 {
     builder
-        .BaseUrl("https://custom.api.flagkit.dev/api/v1")
         .PollingInterval(TimeSpan.FromSeconds(60))
         .CacheTtl(TimeSpan.FromMinutes(10))
         .MaxCacheSize(500)
@@ -72,7 +71,6 @@ Or using options directly:
 var options = new FlagKitOptions
 {
     ApiKey = "sdk_your_api_key",
-    BaseUrl = "https://custom.api.flagkit.dev/api/v1",
     PollingInterval = TimeSpan.FromSeconds(60),
     CacheTtl = TimeSpan.FromMinutes(10),
     MaxCacheSize = 500
@@ -294,7 +292,6 @@ public class MyService
 | Property | Default | Description |
 |----------|---------|-------------|
 | `ApiKey` | (required) | API key for authentication |
-| `BaseUrl` | `https://api.flagkit.dev/api/v1` | API base URL |
 | `PollingInterval` | 30 seconds | Polling interval |
 | `CacheTtl` | 5 minutes | Cache time-to-live |
 | `MaxCacheSize` | 1000 | Maximum cache entries |

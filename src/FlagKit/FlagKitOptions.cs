@@ -7,7 +7,6 @@ namespace FlagKit;
 /// </summary>
 public record FlagKitOptions
 {
-    public const string DefaultBaseUrl = "https://api.flagkit.dev/api/v1";
     public static readonly TimeSpan DefaultPollingInterval = TimeSpan.FromSeconds(30);
     public static readonly TimeSpan DefaultCacheTtl = TimeSpan.FromSeconds(300);
     public const int DefaultMaxCacheSize = 1000;
@@ -19,7 +18,6 @@ public record FlagKitOptions
     public static readonly TimeSpan DefaultCircuitBreakerResetTimeout = TimeSpan.FromSeconds(30);
 
     public required string ApiKey { get; init; }
-    public string BaseUrl { get; init; } = DefaultBaseUrl;
     public TimeSpan PollingInterval { get; init; } = DefaultPollingInterval;
     public TimeSpan CacheTtl { get; init; } = DefaultCacheTtl;
     public int MaxCacheSize { get; init; } = DefaultMaxCacheSize;
@@ -42,9 +40,6 @@ public record FlagKitOptions
         if (!validPrefixes.Any(p => ApiKey.StartsWith(p)))
             throw FlagKitException.ConfigError(ErrorCode.ConfigInvalidApiKey, "Invalid API key format");
 
-        if (!Uri.TryCreate(BaseUrl, UriKind.Absolute, out _))
-            throw FlagKitException.ConfigError(ErrorCode.ConfigInvalidBaseUrl, "Invalid base URL");
-
         if (PollingInterval <= TimeSpan.Zero)
             throw FlagKitException.ConfigError(ErrorCode.ConfigInvalidPollingInterval, "Polling interval must be positive");
 
@@ -55,7 +50,6 @@ public record FlagKitOptions
     public class Builder
     {
         private readonly string _apiKey;
-        private string _baseUrl = DefaultBaseUrl;
         private TimeSpan _pollingInterval = DefaultPollingInterval;
         private TimeSpan _cacheTtl = DefaultCacheTtl;
         private int _maxCacheSize = DefaultMaxCacheSize;
@@ -69,7 +63,6 @@ public record FlagKitOptions
 
         public Builder(string apiKey) => _apiKey = apiKey;
 
-        public Builder BaseUrl(string url) { _baseUrl = url; return this; }
         public Builder PollingInterval(TimeSpan interval) { _pollingInterval = interval; return this; }
         public Builder CacheTtl(TimeSpan ttl) { _cacheTtl = ttl; return this; }
         public Builder MaxCacheSize(int size) { _maxCacheSize = size; return this; }
@@ -84,7 +77,6 @@ public record FlagKitOptions
         public FlagKitOptions Build() => new()
         {
             ApiKey = _apiKey,
-            BaseUrl = _baseUrl,
             PollingInterval = _pollingInterval,
             CacheTtl = _cacheTtl,
             MaxCacheSize = _maxCacheSize,

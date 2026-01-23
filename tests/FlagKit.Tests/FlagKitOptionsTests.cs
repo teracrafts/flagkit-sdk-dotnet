@@ -49,20 +49,6 @@ public class FlagKitOptionsTests
     }
 
     [Fact]
-    public void Invalid_BaseUrl_Throws()
-    {
-        var options = new FlagKitOptions
-        {
-            ApiKey = "sdk_test123",
-            BaseUrl = "not-a-url"
-        };
-
-        var ex = Assert.Throws<FlagKitException>(() => options.Validate());
-
-        Assert.Equal(ErrorCode.ConfigInvalidBaseUrl, ex.Code);
-    }
-
-    [Fact]
     public void Zero_PollingInterval_Throws()
     {
         var options = new FlagKitOptions
@@ -94,7 +80,6 @@ public class FlagKitOptionsTests
     public void Builder_Creates_Valid_Options()
     {
         var options = FlagKitOptions.CreateBuilder("sdk_test123")
-            .BaseUrl("https://custom.api.com")
             .PollingInterval(TimeSpan.FromSeconds(60))
             .CacheTtl(TimeSpan.FromMinutes(10))
             .MaxCacheSize(500)
@@ -107,7 +92,6 @@ public class FlagKitOptionsTests
             .Build();
 
         Assert.Equal("sdk_test123", options.ApiKey);
-        Assert.Equal("https://custom.api.com", options.BaseUrl);
         Assert.Equal(TimeSpan.FromSeconds(60), options.PollingInterval);
         Assert.Equal(TimeSpan.FromMinutes(10), options.CacheTtl);
         Assert.Equal(500, options.MaxCacheSize);
@@ -141,7 +125,6 @@ public class FlagKitOptionsTests
     {
         var options = new FlagKitOptions { ApiKey = "sdk_test123" };
 
-        Assert.Equal(FlagKitOptions.DefaultBaseUrl, options.BaseUrl);
         Assert.Equal(FlagKitOptions.DefaultPollingInterval, options.PollingInterval);
         Assert.Equal(FlagKitOptions.DefaultCacheTtl, options.CacheTtl);
         Assert.Equal(FlagKitOptions.DefaultMaxCacheSize, options.MaxCacheSize);

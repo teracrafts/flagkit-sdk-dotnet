@@ -11,6 +11,8 @@ namespace FlagKit.Http;
 /// </summary>
 public class FlagKitHttpClient : IDisposable
 {
+    internal const string DefaultBaseUrl = "https://api.flagkit.dev/api/v1";
+
     private readonly HttpClient _httpClient;
     private readonly CircuitBreaker _circuitBreaker;
     private readonly FlagKitOptions _options;
@@ -33,7 +35,7 @@ public class FlagKitHttpClient : IDisposable
 
         _httpClient = new HttpClient
         {
-            BaseAddress = new Uri(options.BaseUrl),
+            BaseAddress = new Uri(DefaultBaseUrl),
             Timeout = options.Timeout
         };
 
