@@ -30,6 +30,10 @@ public record FlagKitOptions
     public int CircuitBreakerThreshold { get; init; } = DefaultCircuitBreakerThreshold;
     public TimeSpan CircuitBreakerResetTimeout { get; init; } = DefaultCircuitBreakerResetTimeout;
     public Dictionary<string, object>? Bootstrap { get; init; }
+    /// <summary>
+    /// Local development server port. When set, uses http://localhost:{port}/api/v1.
+    /// </summary>
+    public int? LocalPort { get; init; }
 
     public void Validate()
     {
@@ -60,6 +64,7 @@ public record FlagKitOptions
         private TimeSpan _timeout = DefaultTimeout;
         private int _retryAttempts = DefaultRetryAttempts;
         private Dictionary<string, object>? _bootstrap;
+        private int? _localPort;
 
         public Builder(string apiKey) => _apiKey = apiKey;
 
@@ -73,6 +78,7 @@ public record FlagKitOptions
         public Builder Timeout(TimeSpan timeout) { _timeout = timeout; return this; }
         public Builder RetryAttempts(int attempts) { _retryAttempts = attempts; return this; }
         public Builder Bootstrap(Dictionary<string, object> data) { _bootstrap = data; return this; }
+        public Builder LocalPort(int port) { _localPort = port; return this; }
 
         public FlagKitOptions Build() => new()
         {
@@ -86,7 +92,8 @@ public record FlagKitOptions
             EventsEnabled = _eventsEnabled,
             Timeout = _timeout,
             RetryAttempts = _retryAttempts,
-            Bootstrap = _bootstrap
+            Bootstrap = _bootstrap,
+            LocalPort = _localPort
         };
     }
 

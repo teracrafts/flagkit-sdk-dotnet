@@ -26,6 +26,12 @@ public class FlagKitHttpClient : IDisposable
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    /// <summary>
+    /// Returns the base URL for the given local port, or the default production URL.
+    /// </summary>
+    public static string GetBaseUrl(int? localPort) =>
+        localPort.HasValue ? $"http://localhost:{localPort.Value}/api/v1" : DefaultBaseUrl;
+
     public FlagKitHttpClient(FlagKitOptions options)
     {
         _options = options;
@@ -35,7 +41,7 @@ public class FlagKitHttpClient : IDisposable
 
         _httpClient = new HttpClient
         {
-            BaseAddress = new Uri(DefaultBaseUrl),
+            BaseAddress = new Uri(GetBaseUrl(options.LocalPort)),
             Timeout = options.Timeout
         };
 
