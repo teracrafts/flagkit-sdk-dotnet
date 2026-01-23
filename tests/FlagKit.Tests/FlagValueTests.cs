@@ -1,4 +1,5 @@
 using System.Text.Json;
+using FlagKit.Types;
 using Xunit;
 
 namespace FlagKit.Tests;

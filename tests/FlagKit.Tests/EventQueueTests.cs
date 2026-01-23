@@ -1,3 +1,4 @@
+using FlagKit.Core;
 using Xunit;
 
 namespace FlagKit.Tests;

@@ -1,3 +1,5 @@
+using FlagKit.Errors;
+
 namespace FlagKit;
 
 /// <summary>
