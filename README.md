@@ -302,6 +302,19 @@ public class MyService
 | `Timeout` | 10 seconds | HTTP timeout |
 | `RetryAttempts` | 3 | Max retry attempts |
 | `Bootstrap` | null | Initial flag data |
+| `LocalPort` | null | Local dev server port (uses `http://localhost:{port}/api/v1`) |
+
+## Local Development
+
+For local development, use the `LocalPort` option to connect to a local FlagKit server:
+
+```csharp
+var options = FlagKitOptions.CreateBuilder("sdk_your_api_key")
+    .LocalPort(8200)  // Uses http://localhost:8200/api/v1
+    .Build();
+
+var client = FlagKit.Initialize(options);
+```
 
 ## License
 
