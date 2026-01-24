@@ -45,7 +45,6 @@ public class FlagKitHttpClient : IDisposable
             Timeout = options.Timeout
         };
 
-        _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {options.ApiKey}");
         _httpClient.DefaultRequestHeaders.Add("X-API-Key", options.ApiKey);
         _httpClient.DefaultRequestHeaders.Add("User-Agent", $"FlagKit-DotNet/{GetVersion()}");
     }
