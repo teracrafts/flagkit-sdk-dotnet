@@ -54,79 +54,98 @@ public record BatchEventsRequest
 
 /// <summary>
 /// Manages batching and sending of analytics events.
+/// Thread-safe with CancellationToken support for graceful shutdown.
 /// </summary>
-public class EventQueue : IDisposable
+public class EventQueue : IDisposable, IAsyncDisposable
 {
     private readonly ConcurrentQueue<AnalyticsEvent> _queue = new();
     private readonly int _batchSize;
     private readonly TimeSpan _flushInterval;
     private readonly Func<List<AnalyticsEvent>, Task> _onFlush;
-    private readonly object _lock = new();
+    private readonly SemaphoreSlim _flushLock = new(1, 1);
+    private readonly CancellationTokenSource _disposalCts = new();
 
     private Timer? _flushTimer;
     private bool _isRunning;
     private bool _disposed;
 
+    /// <summary>
+    /// Creates a new event queue.
+    /// </summary>
+    /// <param name="batchSize">Maximum events per batch (default: 10).</param>
+    /// <param name="flushInterval">Time between automatic flushes (default: 30 seconds).</param>
+    /// <param name="onFlush">Callback to send events to the server.</param>
     public EventQueue(
         int batchSize,
         TimeSpan flushInterval,
         Func<List<AnalyticsEvent>, Task> onFlush)
     {
-        _batchSize = batchSize;
-        _flushInterval = flushInterval;
-        _onFlush = onFlush;
+        _batchSize = batchSize > 0 ? batchSize : 10;
+        _flushInterval = flushInterval > TimeSpan.Zero ? flushInterval : TimeSpan.FromSeconds(30);
+        _onFlush = onFlush ?? throw new ArgumentNullException(nameof(onFlush));
     }
 
+    /// <summary>
+    /// Gets the number of events currently in the queue.
+    /// </summary>
     public int Count => _queue.Count;
 
-    public bool IsRunning
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _isRunning;
-            }
-        }
-    }
+    /// <summary>
+    /// Gets whether the queue is running (auto-flushing enabled).
+    /// </summary>
+    public bool IsRunning => Volatile.Read(ref _isRunning);
 
+    /// <summary>
+    /// Starts the auto-flush timer.
+    /// </summary>
     public void Start()
     {
-        lock (_lock)
-        {
-            if (_isRunning || _disposed) return;
+        if (_disposed) return;
 
-            _isRunning = true;
-            _flushTimer = new Timer(
-                async _ => await FlushAsync(),
-                null,
-                _flushInterval,
-                _flushInterval);
-        }
+        if (Volatile.Read(ref _isRunning)) return;
+
+        Volatile.Write(ref _isRunning, true);
+        _flushTimer = new Timer(
+            OnTimerCallback,
+            null,
+            _flushInterval,
+            _flushInterval);
     }
 
+    /// <summary>
+    /// Stops the auto-flush timer.
+    /// </summary>
     public void Stop()
     {
-        lock (_lock)
-        {
-            _isRunning = false;
-            _flushTimer?.Dispose();
-            _flushTimer = null;
-        }
+        Volatile.Write(ref _isRunning, false);
+        _flushTimer?.Dispose();
+        _flushTimer = null;
     }
 
+    /// <summary>
+    /// Adds an event to the queue.
+    /// Triggers an immediate flush if the batch size is reached.
+    /// </summary>
+    /// <param name="evt">The event to add.</param>
     public void Enqueue(AnalyticsEvent evt)
     {
         if (_disposed) return;
 
         _queue.Enqueue(evt);
 
+        // Trigger flush if batch size reached
         if (_queue.Count >= _batchSize)
         {
             _ = FlushAsync();
         }
     }
 
+    /// <summary>
+    /// Tracks a flag evaluation event.
+    /// </summary>
+    /// <param name="flagKey">The flag key that was evaluated.</param>
+    /// <param name="value">The evaluated value.</param>
+    /// <param name="context">The evaluation context.</param>
     public void TrackEvaluation(
         string flagKey,
         object? value,
@@ -141,6 +160,11 @@ public class EventQueue : IDisposable
         });
     }
 
+    /// <summary>
+    /// Tracks a custom event.
+    /// </summary>
+    /// <param name="eventType">The custom event type.</param>
+    /// <param name="data">Optional event data.</param>
     public void TrackCustom(string eventType, Dictionary<string, object?>? data = null)
     {
         Enqueue(new AnalyticsEvent
@@ -154,6 +178,11 @@ public class EventQueue : IDisposable
         });
     }
 
+    /// <summary>
+    /// Tracks a user identification event.
+    /// </summary>
+    /// <param name="userId">The user ID.</param>
+    /// <param name="attributes">Optional user attributes.</param>
     public void TrackIdentify(string userId, Dictionary<string, object?>? attributes = null)
     {
         Enqueue(new AnalyticsEvent
@@ -167,7 +196,71 @@ public class EventQueue : IDisposable
         });
     }
 
-    public async Task FlushAsync()
+    /// <summary>
+    /// Flushes pending events immediately.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task FlushAsync(CancellationToken cancellationToken = default)
+    {
+        if (_disposed) return;
+
+        // Use a linked token that respects both the passed token and disposal
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, _disposalCts.Token);
+
+        // Try to acquire the flush lock with timeout
+        if (!await _flushLock.WaitAsync(TimeSpan.FromSeconds(5), linkedCts.Token))
+        {
+            return; // Another flush is in progress
+        }
+
+        try
+        {
+            await FlushInternalAsync(linkedCts.Token);
+        }
+        finally
+        {
+            _flushLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Flushes all remaining events, ignoring errors.
+    /// Used during disposal.
+    /// </summary>
+    public async Task FlushAllAsync()
+    {
+        if (_queue.IsEmpty) return;
+
+        try
+        {
+            await _flushLock.WaitAsync(TimeSpan.FromSeconds(10));
+            try
+            {
+                // Flush all events, not just a batch
+                var events = new List<AnalyticsEvent>();
+                while (_queue.TryDequeue(out var evt))
+                {
+                    events.Add(evt);
+                }
+
+                if (events.Count > 0)
+                {
+                    await _onFlush(events);
+                }
+            }
+            finally
+            {
+                _flushLock.Release();
+            }
+        }
+        catch
+        {
+            // Ignore errors during final flush
+        }
+    }
+
+    private async Task FlushInternalAsync(CancellationToken cancellationToken)
     {
         var events = new List<AnalyticsEvent>();
 
@@ -180,7 +273,17 @@ public class EventQueue : IDisposable
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await _onFlush(events);
+        }
+        catch (OperationCanceledException)
+        {
+            // Re-queue events on cancellation
+            foreach (var evt in events)
+            {
+                _queue.Enqueue(evt);
+            }
+            throw;
         }
         catch
         {
@@ -192,19 +295,77 @@ public class EventQueue : IDisposable
         }
     }
 
+    private void OnTimerCallback(object? state)
+    {
+        if (!_isRunning || _disposed) return;
+
+        try
+        {
+            _ = FlushAsync(_disposalCts.Token);
+        }
+        catch
+        {
+            // Ignore timer callback errors
+        }
+    }
+
+    /// <summary>
+    /// Disposes the event queue, stopping the timer and flushing remaining events.
+    /// </summary>
     public void Dispose()
+    {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Disposes the event queue asynchronously, flushing all remaining events.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        await DisposeAsyncCore();
+        Dispose(disposing: false);
+        GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// Protected dispose implementation.
+    /// </summary>
+    protected virtual void Dispose(bool disposing)
     {
         if (_disposed) return;
 
-        lock (_lock)
+        if (disposing)
         {
-            _disposed = true;
-            _isRunning = false;
+            Volatile.Write(ref _isRunning, false);
+            _disposalCts.Cancel();
             _flushTimer?.Dispose();
             _flushTimer = null;
+            _flushLock.Dispose();
+            _disposalCts.Dispose();
         }
 
-        // Final flush
-        _ = FlushAsync();
+        _disposed = true;
+    }
+
+    /// <summary>
+    /// Protected async dispose implementation.
+    /// </summary>
+    protected virtual async ValueTask DisposeAsyncCore()
+    {
+        if (_disposed) return;
+
+        Volatile.Write(ref _isRunning, false);
+        _flushTimer?.Dispose();
+        _flushTimer = null;
+
+        // Flush remaining events before disposal
+        await FlushAllAsync();
+
+        _disposalCts.Cancel();
+        _flushLock.Dispose();
+        _disposalCts.Dispose();
+
+        _disposed = true;
     }
 }
