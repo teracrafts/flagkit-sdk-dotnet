@@ -5,6 +5,7 @@ namespace FlagKit;
 
 /// <summary>
 /// Static factory for FlagKit SDK with singleton pattern.
+/// Provides convenience methods that delegate to the singleton instance.
 /// </summary>
 public static class FlagKit
 {
@@ -42,6 +43,20 @@ public static class FlagKit
             lock (Lock)
             {
                 return _instance != null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets whether the SDK is ready (initialized and can evaluate flags).
+    /// </summary>
+    public static bool IsReady
+    {
+        get
+        {
+            lock (Lock)
+            {
+                return _instance?.IsReady ?? false;
             }
         }
     }
@@ -124,6 +139,24 @@ public static class FlagKit
         }
     }
 
+    /// <summary>
+    /// Closes the SDK asynchronously, flushing any pending events.
+    /// </summary>
+    public static async Task CloseAsync()
+    {
+        FlagKitClient? instance;
+        lock (Lock)
+        {
+            instance = _instance;
+            _instance = null;
+        }
+
+        if (instance != null)
+        {
+            await instance.DisposeAsync();
+        }
+    }
+
     // Convenience methods that delegate to Instance
 
     /// <summary>
@@ -139,16 +172,54 @@ public static class FlagKit
         => Instance.SetContext(context);
 
     /// <summary>
+    /// Gets the current global evaluation context.
+    /// </summary>
+    public static EvaluationContext GetContext()
+        => Instance.GetContext();
+
+    /// <summary>
     /// Clears the global evaluation context.
     /// </summary>
     public static void ClearContext()
         => Instance.ClearContext();
 
     /// <summary>
+    /// Resets the context to anonymous state.
+    /// </summary>
+    public static void Reset()
+        => Instance.Reset();
+
+    /// <summary>
     /// Evaluates a flag and returns the result.
     /// </summary>
     public static EvaluationResult Evaluate(string flagKey, EvaluationContext? context = null)
         => Instance.Evaluate(flagKey, context);
+
+    /// <summary>
+    /// Evaluates a flag asynchronously.
+    /// </summary>
+    public static Task<EvaluationResult> EvaluateAsync(
+        string flagKey,
+        EvaluationContext? context = null,
+        CancellationToken cancellationToken = default)
+        => Instance.EvaluateAsync(flagKey, context, cancellationToken);
+
+    /// <summary>
+    /// Evaluates all flags and returns results.
+    /// </summary>
+    public static Task<Dictionary<string, EvaluationResult>> EvaluateAllAsync(
+        EvaluationContext? context = null,
+        CancellationToken cancellationToken = default)
+        => Instance.EvaluateAllAsync(context, cancellationToken);
+
+    /// <summary>
+    /// Evaluates multiple flags in a batch.
+    /// </summary>
+    public static Task<Dictionary<string, EvaluationResult>> EvaluateBatchAsync(
+        IEnumerable<string> flagKeys,
+        EvaluationContext? context = null,
+        CancellationToken cancellationToken = default)
+        => Instance.EvaluateBatchAsync(flagKeys, context, cancellationToken);
 
     /// <summary>
     /// Gets a boolean flag value.
@@ -184,6 +255,24 @@ public static class FlagKit
         => Instance.GetJsonValue(flagKey, defaultValue, context);
 
     /// <summary>
+    /// Gets a typed JSON flag value.
+    /// </summary>
+    public static T GetJsonValue<T>(string flagKey, T defaultValue, EvaluationContext? context = null)
+        => Instance.GetJsonValue(flagKey, defaultValue, context);
+
+    /// <summary>
+    /// Checks if a flag exists in the cache.
+    /// </summary>
+    public static bool HasFlag(string flagKey)
+        => Instance.HasFlag(flagKey);
+
+    /// <summary>
+    /// Gets all flag keys currently in cache.
+    /// </summary>
+    public static IReadOnlyList<string> GetAllFlagKeys()
+        => Instance.GetAllFlagKeys();
+
+    /// <summary>
     /// Gets all cached flags.
     /// </summary>
     public static IReadOnlyDictionary<string, FlagState> GetAllFlags()
@@ -200,6 +289,12 @@ public static class FlagKit
     /// </summary>
     public static Task FlushAsync()
         => Instance.FlushAsync();
+
+    /// <summary>
+    /// Forces a refresh of all flags from the server.
+    /// </summary>
+    public static Task RefreshAsync(CancellationToken cancellationToken = default)
+        => Instance.RefreshAsync(cancellationToken);
 
     /// <summary>
     /// Waits for the SDK to be ready.
