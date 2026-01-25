@@ -17,6 +17,8 @@ public record FlagKitOptions
     public const int DefaultRetryAttempts = 3;
     public const int DefaultCircuitBreakerThreshold = 5;
     public static readonly TimeSpan DefaultCircuitBreakerResetTimeout = TimeSpan.FromSeconds(30);
+    public const int DefaultMaxPersistedEvents = 10000;
+    public static readonly TimeSpan DefaultPersistenceFlushInterval = TimeSpan.FromSeconds(1);
 
     public required string ApiKey { get; init; }
     public TimeSpan PollingInterval { get; init; } = DefaultPollingInterval;
@@ -67,6 +69,32 @@ public record FlagKitOptions
     /// </summary>
     public bool EnableCacheEncryption { get; init; } = false;
 
+    /// <summary>
+    /// Whether to persist events to disk for crash-resilient event delivery.
+    /// When enabled, events are written to disk before being queued for sending.
+    /// Default: false.
+    /// </summary>
+    public bool PersistEvents { get; init; } = false;
+
+    /// <summary>
+    /// Directory path for storing persisted events.
+    /// If not specified, uses the OS temp directory with a flagkit subdirectory.
+    /// </summary>
+    public string? EventStoragePath { get; init; }
+
+    /// <summary>
+    /// Maximum number of events to persist to disk.
+    /// Oldest events are discarded when this limit is reached.
+    /// Default: 10000.
+    /// </summary>
+    public int MaxPersistedEvents { get; init; } = DefaultMaxPersistedEvents;
+
+    /// <summary>
+    /// Interval between flushing events from memory buffer to disk.
+    /// Default: 1 second.
+    /// </summary>
+    public TimeSpan PersistenceFlushInterval { get; init; } = DefaultPersistenceFlushInterval;
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ApiKey))
@@ -97,6 +125,13 @@ public record FlagKitOptions
                     "Set ASPNETCORE_ENVIRONMENT to a non-production value or remove LocalPort configuration.");
             }
         }
+
+        // Validate event persistence options
+        if (MaxPersistedEvents <= 0)
+            throw FlagKitException.ConfigError(ErrorCode.ConfigInvalidPollingInterval, "MaxPersistedEvents must be positive");
+
+        if (PersistenceFlushInterval <= TimeSpan.Zero)
+            throw FlagKitException.ConfigError(ErrorCode.ConfigInvalidPollingInterval, "PersistenceFlushInterval must be positive");
     }
 
     public class Builder
@@ -118,6 +153,10 @@ public record FlagKitOptions
         private List<string>? _privateAttributes;
         private bool _enableRequestSigning = false;
         private bool _enableCacheEncryption = false;
+        private bool _persistEvents = false;
+        private string? _eventStoragePath;
+        private int _maxPersistedEvents = DefaultMaxPersistedEvents;
+        private TimeSpan _persistenceFlushInterval = DefaultPersistenceFlushInterval;
 
         public Builder(string apiKey) => _apiKey = apiKey;
 
@@ -137,6 +176,10 @@ public record FlagKitOptions
         public Builder PrivateAttributes(List<string> attributes) { _privateAttributes = attributes; return this; }
         public Builder EnableRequestSigning(bool enabled) { _enableRequestSigning = enabled; return this; }
         public Builder EnableCacheEncryption(bool enabled) { _enableCacheEncryption = enabled; return this; }
+        public Builder PersistEvents(bool enabled) { _persistEvents = enabled; return this; }
+        public Builder EventStoragePath(string path) { _eventStoragePath = path; return this; }
+        public Builder MaxPersistedEvents(int max) { _maxPersistedEvents = max; return this; }
+        public Builder PersistenceFlushInterval(TimeSpan interval) { _persistenceFlushInterval = interval; return this; }
 
         public FlagKitOptions Build() => new()
         {
@@ -156,7 +199,11 @@ public record FlagKitOptions
             StrictPIIMode = _strictPIIMode,
             PrivateAttributes = _privateAttributes,
             EnableRequestSigning = _enableRequestSigning,
-            EnableCacheEncryption = _enableCacheEncryption
+            EnableCacheEncryption = _enableCacheEncryption,
+            PersistEvents = _persistEvents,
+            EventStoragePath = _eventStoragePath,
+            MaxPersistedEvents = _maxPersistedEvents,
+            PersistenceFlushInterval = _persistenceFlushInterval
         };
     }
 
