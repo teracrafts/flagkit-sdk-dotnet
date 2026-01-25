@@ -1,4 +1,5 @@
 using FlagKit.Errors;
+using System.Security;
 
 namespace FlagKit;
 
@@ -35,6 +36,37 @@ public record FlagKitOptions
     /// </summary>
     public int? LocalPort { get; init; }
 
+    /// <summary>
+    /// Secondary API key for automatic failover on 401 errors.
+    /// When the primary key fails with unauthorized, the SDK will automatically retry with this key.
+    /// </summary>
+    public string? SecondaryApiKey { get; init; }
+
+    /// <summary>
+    /// When enabled, throws SecurityException instead of warning when PII is detected without PrivateAttributes.
+    /// Default: false (only warns).
+    /// </summary>
+    public bool StrictPIIMode { get; init; } = false;
+
+    /// <summary>
+    /// Fields that should be treated as private and not sent to the server.
+    /// PII fields listed here will not trigger warnings or exceptions in strict mode.
+    /// </summary>
+    public List<string>? PrivateAttributes { get; init; }
+
+    /// <summary>
+    /// Whether to sign POST request bodies with HMAC-SHA256.
+    /// Default: false.
+    /// </summary>
+    public bool EnableRequestSigning { get; init; } = false;
+
+    /// <summary>
+    /// Whether to encrypt cached data using AES-256-CBC with HMAC-SHA256 authentication.
+    /// Key is derived from API key using PBKDF2.
+    /// Default: false.
+    /// </summary>
+    public bool EnableCacheEncryption { get; init; } = false;
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ApiKey))
@@ -49,6 +81,22 @@ public record FlagKitOptions
 
         if (CacheTtl <= TimeSpan.Zero)
             throw FlagKitException.ConfigError(ErrorCode.ConfigInvalidCacheTtl, "Cache TTL must be positive");
+
+        // Validate secondary API key format if provided
+        if (!string.IsNullOrWhiteSpace(SecondaryApiKey) && !validPrefixes.Any(p => SecondaryApiKey.StartsWith(p)))
+            throw FlagKitException.ConfigError(ErrorCode.ConfigInvalidApiKey, "Invalid secondary API key format");
+
+        // Prevent LocalPort usage in production environment
+        if (LocalPort.HasValue)
+        {
+            var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+            if (string.Equals(env, "Production", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new SecurityException(
+                    "LocalPort cannot be used in Production environment. " +
+                    "Set ASPNETCORE_ENVIRONMENT to a non-production value or remove LocalPort configuration.");
+            }
+        }
     }
 
     public class Builder
@@ -65,6 +113,11 @@ public record FlagKitOptions
         private int _retryAttempts = DefaultRetryAttempts;
         private Dictionary<string, object>? _bootstrap;
         private int? _localPort;
+        private string? _secondaryApiKey;
+        private bool _strictPIIMode = false;
+        private List<string>? _privateAttributes;
+        private bool _enableRequestSigning = false;
+        private bool _enableCacheEncryption = false;
 
         public Builder(string apiKey) => _apiKey = apiKey;
 
@@ -79,6 +132,11 @@ public record FlagKitOptions
         public Builder RetryAttempts(int attempts) { _retryAttempts = attempts; return this; }
         public Builder Bootstrap(Dictionary<string, object> data) { _bootstrap = data; return this; }
         public Builder LocalPort(int port) { _localPort = port; return this; }
+        public Builder SecondaryApiKey(string key) { _secondaryApiKey = key; return this; }
+        public Builder StrictPIIMode(bool enabled) { _strictPIIMode = enabled; return this; }
+        public Builder PrivateAttributes(List<string> attributes) { _privateAttributes = attributes; return this; }
+        public Builder EnableRequestSigning(bool enabled) { _enableRequestSigning = enabled; return this; }
+        public Builder EnableCacheEncryption(bool enabled) { _enableCacheEncryption = enabled; return this; }
 
         public FlagKitOptions Build() => new()
         {
@@ -93,7 +151,12 @@ public record FlagKitOptions
             Timeout = _timeout,
             RetryAttempts = _retryAttempts,
             Bootstrap = _bootstrap,
-            LocalPort = _localPort
+            LocalPort = _localPort,
+            SecondaryApiKey = _secondaryApiKey,
+            StrictPIIMode = _strictPIIMode,
+            PrivateAttributes = _privateAttributes,
+            EnableRequestSigning = _enableRequestSigning,
+            EnableCacheEncryption = _enableCacheEncryption
         };
     }
 

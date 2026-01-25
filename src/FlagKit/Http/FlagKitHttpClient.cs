@@ -1,13 +1,15 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FlagKit.Errors;
+using FlagKit.Utils;
 
 namespace FlagKit.Http;
 
 /// <summary>
-/// HTTP client with retry logic and circuit breaker.
+/// HTTP client with retry logic, circuit breaker, request signing, and key rotation.
 /// </summary>
 public class FlagKitHttpClient : IDisposable
 {
@@ -18,6 +20,8 @@ public class FlagKitHttpClient : IDisposable
     private readonly FlagKitOptions _options;
     private readonly Random _random = new();
     private bool _disposed;
+    private bool _usingSecondaryKey = false;
+    private readonly object _keyRotationLock = new();
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -45,17 +49,49 @@ public class FlagKitHttpClient : IDisposable
             Timeout = options.Timeout
         };
 
-        _httpClient.DefaultRequestHeaders.Add("X-API-Key", options.ApiKey);
+        // Note: API key is now added per-request to support key rotation
         _httpClient.DefaultRequestHeaders.Add("User-Agent", $"FlagKit-DotNet/{GetVersion()}");
     }
 
     public async Task<T> GetAsync<T>(string path, CancellationToken cancellationToken = default)
     {
-        return await ExecuteWithRetryAsync(async () =>
+        return await ExecuteWithRetryAndKeyRotationAsync(async (apiKey) =>
         {
-            var response = await _httpClient.GetAsync(path, cancellationToken);
+            var request = new HttpRequestMessage(HttpMethod.Get, path);
+            request.Headers.Add("X-API-Key", apiKey);
+            var response = await _httpClient.SendAsync(request, cancellationToken);
             return await HandleResponseAsync<T>(response, cancellationToken);
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets the currently active API key (primary or secondary if rotated).
+    /// </summary>
+    public string CurrentApiKey
+    {
+        get
+        {
+            lock (_keyRotationLock)
+            {
+                return _usingSecondaryKey && !string.IsNullOrEmpty(_options.SecondaryApiKey)
+                    ? _options.SecondaryApiKey
+                    : _options.ApiKey;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets whether the client is currently using the secondary API key.
+    /// </summary>
+    public bool IsUsingSecondaryKey
+    {
+        get
+        {
+            lock (_keyRotationLock)
+            {
+                return _usingSecondaryKey;
+            }
+        }
     }
 
     public async Task<TResponse> PostAsync<TRequest, TResponse>(
@@ -63,9 +99,10 @@ public class FlagKitHttpClient : IDisposable
         TRequest body,
         CancellationToken cancellationToken = default)
     {
-        return await ExecuteWithRetryAsync(async () =>
+        return await ExecuteWithRetryAndKeyRotationAsync(async (apiKey) =>
         {
-            var response = await _httpClient.PostAsJsonAsync(path, body, JsonOptions, cancellationToken);
+            var request = CreateSignedPostRequest(path, body, apiKey);
+            var response = await _httpClient.SendAsync(request, cancellationToken);
             return await HandleResponseAsync<TResponse>(response, cancellationToken);
         }, cancellationToken);
     }
@@ -75,12 +112,82 @@ public class FlagKitHttpClient : IDisposable
         TRequest body,
         CancellationToken cancellationToken = default)
     {
-        await ExecuteWithRetryAsync(async () =>
+        await ExecuteWithRetryAndKeyRotationAsync(async (apiKey) =>
         {
-            var response = await _httpClient.PostAsJsonAsync(path, body, JsonOptions, cancellationToken);
+            var request = CreateSignedPostRequest(path, body, apiKey);
+            var response = await _httpClient.SendAsync(request, cancellationToken);
             await EnsureSuccessAsync(response, cancellationToken);
             return true;
         }, cancellationToken);
+    }
+
+    private HttpRequestMessage CreateSignedPostRequest<TRequest>(
+        string path,
+        TRequest body,
+        string apiKey)
+    {
+        var jsonBody = JsonSerializer.Serialize(body, JsonOptions);
+        var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new StringContent(jsonBody, Encoding.UTF8, "application/json")
+        };
+
+        // Add API key header
+        request.Headers.Add("X-API-Key", apiKey);
+
+        // Add request signing if enabled
+        if (_options.EnableRequestSigning)
+        {
+            var (signature, timestamp) = Security.CreateRequestSignature(jsonBody, apiKey);
+            request.Headers.Add("X-Signature", signature);
+            request.Headers.Add("X-Timestamp", timestamp.ToString());
+            request.Headers.Add("X-Key-Id", Security.GetKeyId(apiKey));
+        }
+
+        return request;
+    }
+
+    private async Task<T> ExecuteWithRetryAndKeyRotationAsync<T>(
+        Func<string, Task<T>> action,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ExecuteWithRetryAsync(
+                () => action(CurrentApiKey),
+                cancellationToken);
+        }
+        catch (FlagKitException ex) when (ex.Code == ErrorCode.HttpUnauthorized)
+        {
+            // Try key rotation if we have a secondary key and haven't already rotated
+            if (!string.IsNullOrEmpty(_options.SecondaryApiKey))
+            {
+                bool shouldRetry;
+                lock (_keyRotationLock)
+                {
+                    if (!_usingSecondaryKey)
+                    {
+                        _usingSecondaryKey = true;
+                        shouldRetry = true;
+                    }
+                    else
+                    {
+                        shouldRetry = false;
+                    }
+                }
+
+                if (shouldRetry)
+                {
+                    // Retry with the secondary key
+                    return await ExecuteWithRetryAsync(
+                        () => action(CurrentApiKey),
+                        cancellationToken);
+                }
+            }
+
+            // No secondary key or already tried - rethrow
+            throw;
+        }
     }
 
     private async Task<T> ExecuteWithRetryAsync<T>(

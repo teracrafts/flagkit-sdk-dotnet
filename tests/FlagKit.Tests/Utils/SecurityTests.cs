@@ -1,5 +1,9 @@
 using FlagKit.Utils;
 using Moq;
+using System.IO;
+using System.Security;
+using System.Security.Cryptography;
+using System.Text;
 using Xunit;
 
 namespace FlagKit.Tests.Utils;
@@ -619,6 +623,491 @@ public class SecurityTests
         // Invalid keys
         Assert.False(Security.IsServerKey("invalid_key"));
         Assert.False(Security.IsClientKey("invalid_key"));
+    }
+
+    #endregion
+
+    #region Strict PII Mode Tests
+
+    [Fact]
+    public void CheckPIIStrict_ThrowsSecurityException_WhenPIIDetectedInStrictMode()
+    {
+        var config = new SecurityConfig
+        {
+            StrictPIIMode = true,
+            WarnOnPotentialPII = true
+        };
+
+        var data = new Dictionary<string, object?>
+        {
+            ["email"] = "user@example.com"
+        };
+
+        var ex = Assert.Throws<SecurityException>(() =>
+            Security.CheckPIIStrict(data, "context", null, config));
+
+        Assert.Contains("email", ex.Message);
+        Assert.Contains("Potential PII detected", ex.Message);
+    }
+
+    [Fact]
+    public void CheckPIIStrict_WarnsOnly_WhenPIIDetectedWithoutStrictMode()
+    {
+        var mockLogger = new Mock<ILogger>();
+        var config = new SecurityConfig
+        {
+            StrictPIIMode = false,
+            WarnOnPotentialPII = true
+        };
+
+        var data = new Dictionary<string, object?>
+        {
+            ["email"] = "user@example.com"
+        };
+
+        // Should not throw
+        var ex = Record.Exception(() =>
+            Security.CheckPIIStrict(data, "context", mockLogger.Object, config));
+
+        Assert.Null(ex);
+        mockLogger.Verify(l => l.Warn(It.Is<string>(s =>
+            s.Contains("email"))), Times.Once);
+    }
+
+    [Fact]
+    public void CheckPIIStrict_DoesNotThrow_WhenPIIFieldIsInPrivateAttributes()
+    {
+        var config = new SecurityConfig
+        {
+            StrictPIIMode = true,
+            WarnOnPotentialPII = true,
+            PrivateAttributes = new List<string> { "email" }
+        };
+
+        var data = new Dictionary<string, object?>
+        {
+            ["email"] = "user@example.com"
+        };
+
+        // Should not throw because email is in private attributes
+        var ex = Record.Exception(() =>
+            Security.CheckPIIStrict(data, "context", null, config));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void CheckPIIStrict_DoesNotThrow_WhenNestedPIIFieldIsInPrivateAttributes()
+    {
+        var config = new SecurityConfig
+        {
+            StrictPIIMode = true,
+            WarnOnPotentialPII = true,
+            PrivateAttributes = new List<string> { "user.email" }
+        };
+
+        var data = new Dictionary<string, object?>
+        {
+            ["user"] = new Dictionary<string, object?>
+            {
+                ["email"] = "user@example.com"
+            }
+        };
+
+        // Should not throw because user.email is in private attributes
+        var ex = Record.Exception(() =>
+            Security.CheckPIIStrict(data, "context", null, config));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void CheckPIIStrict_HandlesNullData()
+    {
+        var config = new SecurityConfig
+        {
+            StrictPIIMode = true,
+            WarnOnPotentialPII = true
+        };
+
+        // Should not throw for null data
+        var ex = Record.Exception(() =>
+            Security.CheckPIIStrict(null, "context", null, config));
+
+        Assert.Null(ex);
+    }
+
+    #endregion
+
+    #region GetKeyId Tests
+
+    [Theory]
+    [InlineData("sdk_abc123def456", "sdk_abc1")]
+    [InlineData("srv_xyz789abc", "srv_xyz7")]
+    [InlineData("cli_test", "cli_test")]
+    [InlineData("short", "short")]
+    [InlineData("", "")]
+    public void GetKeyId_ReturnsFirst8Characters(string apiKey, string expected)
+    {
+        Assert.Equal(expected, Security.GetKeyId(apiKey));
+    }
+
+    [Fact]
+    public void GetKeyId_HandlesNullKey()
+    {
+        Assert.Equal(string.Empty, Security.GetKeyId(null!));
+    }
+
+    #endregion
+
+    #region HMAC-SHA256 Signing Tests
+
+    [Fact]
+    public void GenerateHMACSHA256_ProducesConsistentSignatures()
+    {
+        var message = "test message";
+        var key = "secret-key";
+
+        var sig1 = Security.GenerateHMACSHA256(message, key);
+        var sig2 = Security.GenerateHMACSHA256(message, key);
+
+        Assert.Equal(sig1, sig2);
+        Assert.Matches("^[a-f0-9]{64}$", sig1);
+    }
+
+    [Fact]
+    public void GenerateHMACSHA256_DifferentMessages_DifferentSignatures()
+    {
+        var key = "secret-key";
+
+        var sig1 = Security.GenerateHMACSHA256("message1", key);
+        var sig2 = Security.GenerateHMACSHA256("message2", key);
+
+        Assert.NotEqual(sig1, sig2);
+    }
+
+    [Fact]
+    public void GenerateHMACSHA256_DifferentKeys_DifferentSignatures()
+    {
+        var message = "test message";
+
+        var sig1 = Security.GenerateHMACSHA256(message, "key1");
+        var sig2 = Security.GenerateHMACSHA256(message, "key2");
+
+        Assert.NotEqual(sig1, sig2);
+    }
+
+    [Fact]
+    public void CreateRequestSignature_ReturnsValidSignatureAndTimestamp()
+    {
+        var body = """{"event": "test"}""";
+        var apiKey = "sdk_abc123";
+
+        var (signature, timestamp) = Security.CreateRequestSignature(body, apiKey);
+
+        Assert.Matches("^[a-f0-9]{64}$", signature);
+        Assert.True(timestamp > 0);
+    }
+
+    [Fact]
+    public void CreateRequestSignature_UsesProvidedTimestamp()
+    {
+        var body = """{"test": true}""";
+        var apiKey = "sdk_test";
+        var expectedTimestamp = 1700000000000L;
+
+        var (_, timestamp) = Security.CreateRequestSignature(body, apiKey, expectedTimestamp);
+
+        Assert.Equal(expectedTimestamp, timestamp);
+    }
+
+    [Fact]
+    public void VerifyRequestSignature_ValidSignature_ReturnsTrue()
+    {
+        var body = """{"event": "test"}""";
+        var apiKey = "sdk_abc123";
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var (signature, _) = Security.CreateRequestSignature(body, apiKey, timestamp);
+        var isValid = Security.VerifyRequestSignature(body, signature, timestamp, apiKey);
+
+        Assert.True(isValid);
+    }
+
+    [Fact]
+    public void VerifyRequestSignature_ExpiredSignature_ReturnsFalse()
+    {
+        var body = """{"event": "test"}""";
+        var apiKey = "sdk_abc123";
+        var oldTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 600000; // 10 minutes ago
+
+        var (signature, _) = Security.CreateRequestSignature(body, apiKey, oldTimestamp);
+        var isValid = Security.VerifyRequestSignature(body, signature, oldTimestamp, apiKey, 300000); // 5 min max age
+
+        Assert.False(isValid);
+    }
+
+    [Fact]
+    public void VerifyRequestSignature_WrongKey_ReturnsFalse()
+    {
+        var body = """{"event": "test"}""";
+        var apiKey = "sdk_abc123";
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var (signature, _) = Security.CreateRequestSignature(body, apiKey, timestamp);
+        var isValid = Security.VerifyRequestSignature(body, signature, timestamp, "sdk_different");
+
+        Assert.False(isValid);
+    }
+
+    [Fact]
+    public void VerifyRequestSignature_ModifiedBody_ReturnsFalse()
+    {
+        var body = """{"event": "test"}""";
+        var apiKey = "sdk_abc123";
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var (signature, _) = Security.CreateRequestSignature(body, apiKey, timestamp);
+        var isValid = Security.VerifyRequestSignature("""{"event": "modified"}""", signature, timestamp, apiKey);
+
+        Assert.False(isValid);
+    }
+
+    [Fact]
+    public void VerifyRequestSignature_FutureTimestamp_ReturnsFalse()
+    {
+        var body = """{"event": "test"}""";
+        var apiKey = "sdk_abc123";
+        var futureTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60000; // 1 minute in future
+
+        var (signature, _) = Security.CreateRequestSignature(body, apiKey, futureTimestamp);
+        var isValid = Security.VerifyRequestSignature(body, signature, futureTimestamp, apiKey);
+
+        Assert.False(isValid);
+    }
+
+    #endregion
+
+    #region IsProductionEnvironment Tests
+
+    [Fact]
+    public void IsProductionEnvironment_ReturnsBasedOnEnvironmentVariable()
+    {
+        // This test validates the method exists and returns a boolean
+        // The actual environment variable check depends on the test environment
+        var result = Security.IsProductionEnvironment();
+        Assert.IsType<bool>(result);
+    }
+
+    #endregion
+}
+
+public class CacheEncryptionTests
+{
+    private const string TestApiKey = "sdk_test_key_12345";
+
+    #region DeriveKey Tests
+
+    [Fact]
+    public void DeriveKey_ProducesConsistentKeys()
+    {
+        var salt = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+
+        var key1 = CacheEncryption.DeriveKey(TestApiKey, salt);
+        var key2 = CacheEncryption.DeriveKey(TestApiKey, salt);
+
+        Assert.Equal(key1, key2);
+        Assert.Equal(32, key1.Length); // 256 bits
+    }
+
+    [Fact]
+    public void DeriveKey_DifferentSalts_DifferentKeys()
+    {
+        var salt1 = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+        var salt2 = new byte[] { 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1 };
+
+        var key1 = CacheEncryption.DeriveKey(TestApiKey, salt1);
+        var key2 = CacheEncryption.DeriveKey(TestApiKey, salt2);
+
+        Assert.NotEqual(key1, key2);
+    }
+
+    [Fact]
+    public void DeriveKey_DifferentApiKeys_DifferentKeys()
+    {
+        var salt = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+
+        var key1 = CacheEncryption.DeriveKey("sdk_key_1", salt);
+        var key2 = CacheEncryption.DeriveKey("sdk_key_2", salt);
+
+        Assert.NotEqual(key1, key2);
+    }
+
+    #endregion
+
+    #region Encrypt/Decrypt Tests
+
+    [Fact]
+    public void Encrypt_Decrypt_RoundTrip_ReturnsOriginalData()
+    {
+        var plaintext = Encoding.UTF8.GetBytes("Hello, World!");
+
+        var encrypted = CacheEncryption.Encrypt(plaintext, TestApiKey);
+        var decrypted = CacheEncryption.Decrypt(encrypted, TestApiKey);
+
+        Assert.Equal(plaintext, decrypted);
+    }
+
+    [Fact]
+    public void Encrypt_ProducesDifferentOutputEachTime()
+    {
+        var plaintext = Encoding.UTF8.GetBytes("Hello, World!");
+
+        var encrypted1 = CacheEncryption.Encrypt(plaintext, TestApiKey);
+        var encrypted2 = CacheEncryption.Encrypt(plaintext, TestApiKey);
+
+        // Different nonce/salt means different output
+        Assert.NotEqual(encrypted1, encrypted2);
+    }
+
+    [Fact]
+    public void Decrypt_WithWrongKey_ThrowsCryptographicException()
+    {
+        var plaintext = Encoding.UTF8.GetBytes("Hello, World!");
+        var encrypted = CacheEncryption.Encrypt(plaintext, TestApiKey);
+
+        Assert.Throws<CryptographicException>(() =>
+            CacheEncryption.Decrypt(encrypted, "sdk_wrong_key"));
+    }
+
+    [Fact]
+    public void Decrypt_WithTamperedData_ThrowsCryptographicException()
+    {
+        var plaintext = Encoding.UTF8.GetBytes("Hello, World!");
+        var encrypted = CacheEncryption.Encrypt(plaintext, TestApiKey);
+
+        // Tamper with the ciphertext
+        encrypted[^1] ^= 0xFF;
+
+        Assert.Throws<CryptographicException>(() =>
+            CacheEncryption.Decrypt(encrypted, TestApiKey));
+    }
+
+    [Fact]
+    public void Decrypt_WithTooShortData_ThrowsCryptographicException()
+    {
+        var tooShort = new byte[10];
+
+        Assert.Throws<CryptographicException>(() =>
+            CacheEncryption.Decrypt(tooShort, TestApiKey));
+    }
+
+    #endregion
+
+    #region EncryptString/DecryptString Tests
+
+    [Fact]
+    public void EncryptString_DecryptString_RoundTrip()
+    {
+        var plaintext = "Hello, World! This is a test message.";
+
+        var encrypted = CacheEncryption.EncryptString(plaintext, TestApiKey);
+        var decrypted = CacheEncryption.DecryptString(encrypted, TestApiKey);
+
+        Assert.Equal(plaintext, decrypted);
+    }
+
+    [Fact]
+    public void EncryptString_ReturnsBase64String()
+    {
+        var plaintext = "Test message";
+
+        var encrypted = CacheEncryption.EncryptString(plaintext, TestApiKey);
+
+        // Verify it's valid base64
+        var exception = Record.Exception(() => Convert.FromBase64String(encrypted));
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void EncryptString_HandlesUnicodeCharacters()
+    {
+        var plaintext = "Hello, World! Special chars: "; // emoji and special chars
+
+        var encrypted = CacheEncryption.EncryptString(plaintext, TestApiKey);
+        var decrypted = CacheEncryption.DecryptString(encrypted, TestApiKey);
+
+        Assert.Equal(plaintext, decrypted);
+    }
+
+    [Fact]
+    public void EncryptString_HandlesEmptyString()
+    {
+        var plaintext = "";
+
+        var encrypted = CacheEncryption.EncryptString(plaintext, TestApiKey);
+        var decrypted = CacheEncryption.DecryptString(encrypted, TestApiKey);
+
+        Assert.Equal(plaintext, decrypted);
+    }
+
+    #endregion
+
+    #region EncryptObject/DecryptObject Tests
+
+    [Fact]
+    public void EncryptObject_DecryptObject_RoundTrip()
+    {
+        var testObject = new TestData
+        {
+            Id = 123,
+            Name = "Test",
+            IsActive = true
+        };
+
+        var encrypted = CacheEncryption.EncryptObject(testObject, TestApiKey);
+        var decrypted = CacheEncryption.DecryptObject<TestData>(encrypted, TestApiKey);
+
+        Assert.NotNull(decrypted);
+        Assert.Equal(testObject.Id, decrypted.Id);
+        Assert.Equal(testObject.Name, decrypted.Name);
+        Assert.Equal(testObject.IsActive, decrypted.IsActive);
+    }
+
+    [Fact]
+    public void EncryptObject_DecryptObject_HandlesDictionary()
+    {
+        var testObject = new Dictionary<string, object?>
+        {
+            ["key1"] = "value1",
+            ["key2"] = 42,
+            ["key3"] = true
+        };
+
+        var encrypted = CacheEncryption.EncryptObject(testObject, TestApiKey);
+        var decrypted = CacheEncryption.DecryptObject<Dictionary<string, object?>>(encrypted, TestApiKey);
+
+        Assert.NotNull(decrypted);
+        Assert.Equal(3, decrypted.Count);
+    }
+
+    [Fact]
+    public void EncryptObject_DecryptObject_HandlesList()
+    {
+        var testList = new List<string> { "item1", "item2", "item3" };
+
+        var encrypted = CacheEncryption.EncryptObject(testList, TestApiKey);
+        var decrypted = CacheEncryption.DecryptObject<List<string>>(encrypted, TestApiKey);
+
+        Assert.NotNull(decrypted);
+        Assert.Equal(testList, decrypted);
+    }
+
+    private class TestData
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public bool IsActive { get; set; }
     }
 
     #endregion

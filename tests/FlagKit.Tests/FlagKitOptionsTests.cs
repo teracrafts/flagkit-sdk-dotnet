@@ -1,4 +1,5 @@
 using FlagKit.Errors;
+using System.Security;
 using Xunit;
 
 namespace FlagKit.Tests;
@@ -135,4 +136,154 @@ public class FlagKitOptionsTests
         Assert.Equal(FlagKitOptions.DefaultTimeout, options.Timeout);
         Assert.Equal(FlagKitOptions.DefaultRetryAttempts, options.RetryAttempts);
     }
+
+    #region Security Options Tests
+
+    [Fact]
+    public void Security_Options_Have_Correct_Defaults()
+    {
+        var options = new FlagKitOptions { ApiKey = "sdk_test123" };
+
+        Assert.Null(options.SecondaryApiKey);
+        Assert.False(options.StrictPIIMode);
+        Assert.Null(options.PrivateAttributes);
+        Assert.False(options.EnableRequestSigning);
+        Assert.False(options.EnableCacheEncryption);
+    }
+
+    [Fact]
+    public void Valid_SecondaryApiKey_Passes_Validation()
+    {
+        var options = new FlagKitOptions
+        {
+            ApiKey = "sdk_primary_key",
+            SecondaryApiKey = "sdk_secondary_key"
+        };
+
+        var exception = Record.Exception(() => options.Validate());
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void Invalid_SecondaryApiKey_Prefix_Throws()
+    {
+        var options = new FlagKitOptions
+        {
+            ApiKey = "sdk_primary_key",
+            SecondaryApiKey = "invalid_secondary"
+        };
+
+        var ex = Assert.Throws<FlagKitException>(() => options.Validate());
+
+        Assert.Equal(ErrorCode.ConfigInvalidApiKey, ex.Code);
+        Assert.Contains("secondary", ex.Message.ToLower());
+    }
+
+    [Fact]
+    public void LocalPort_In_Production_Throws_SecurityException()
+    {
+        // Save original environment
+        var originalEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+
+        try
+        {
+            // Set production environment
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Production");
+
+            var options = new FlagKitOptions
+            {
+                ApiKey = "sdk_test123",
+                LocalPort = 8080
+            };
+
+            var ex = Assert.Throws<SecurityException>(() => options.Validate());
+
+            Assert.Contains("LocalPort cannot be used in Production", ex.Message);
+        }
+        finally
+        {
+            // Restore original environment
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", originalEnv);
+        }
+    }
+
+    [Fact]
+    public void LocalPort_In_Development_Does_Not_Throw()
+    {
+        // Save original environment
+        var originalEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+
+        try
+        {
+            // Set development environment
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");
+
+            var options = new FlagKitOptions
+            {
+                ApiKey = "sdk_test123",
+                LocalPort = 8080
+            };
+
+            var exception = Record.Exception(() => options.Validate());
+
+            Assert.Null(exception);
+        }
+        finally
+        {
+            // Restore original environment
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", originalEnv);
+        }
+    }
+
+    [Fact]
+    public void LocalPort_WithNoEnvironment_Does_Not_Throw()
+    {
+        // Save original environment
+        var originalEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+
+        try
+        {
+            // Clear environment variable
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", null);
+
+            var options = new FlagKitOptions
+            {
+                ApiKey = "sdk_test123",
+                LocalPort = 8080
+            };
+
+            var exception = Record.Exception(() => options.Validate());
+
+            Assert.Null(exception);
+        }
+        finally
+        {
+            // Restore original environment
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", originalEnv);
+        }
+    }
+
+    [Fact]
+    public void Builder_With_Security_Options()
+    {
+        var privateAttributes = new List<string> { "email", "phone" };
+
+        var options = FlagKitOptions.CreateBuilder("sdk_test123")
+            .SecondaryApiKey("sdk_secondary_key")
+            .StrictPIIMode(true)
+            .PrivateAttributes(privateAttributes)
+            .EnableRequestSigning(true)
+            .EnableCacheEncryption(true)
+            .Build();
+
+        Assert.Equal("sdk_secondary_key", options.SecondaryApiKey);
+        Assert.True(options.StrictPIIMode);
+        Assert.NotNull(options.PrivateAttributes);
+        Assert.Equal(2, options.PrivateAttributes.Count);
+        Assert.True(options.EnableRequestSigning);
+        Assert.True(options.EnableCacheEncryption);
+    }
+
+    #endregion
 }

@@ -80,7 +80,15 @@ public enum ErrorCode
     ConfigInvalidApiKey,
     ConfigInvalidBaseUrl,
     ConfigInvalidPollingInterval,
-    ConfigInvalidCacheTtl
+    ConfigInvalidCacheTtl,
+
+    // Security errors
+    SecurityLocalPortInProduction,
+    SecurityPIIDetected,
+    SecurityEncryptionFailed,
+    SecurityDecryptionFailed,
+    SecuritySigningFailed,
+    SecurityKeyRotationFailed
 }
 
 public static class ErrorCodeExtensions
@@ -164,6 +172,12 @@ public static class ErrorCodeExtensions
         ErrorCode.ConfigInvalidBaseUrl => "CONFIG_INVALID_BASE_URL",
         ErrorCode.ConfigInvalidPollingInterval => "CONFIG_INVALID_POLLING_INTERVAL",
         ErrorCode.ConfigInvalidCacheTtl => "CONFIG_INVALID_CACHE_TTL",
+        ErrorCode.SecurityLocalPortInProduction => "SECURITY_LOCAL_PORT_IN_PRODUCTION",
+        ErrorCode.SecurityPIIDetected => "SECURITY_PII_DETECTED",
+        ErrorCode.SecurityEncryptionFailed => "SECURITY_ENCRYPTION_FAILED",
+        ErrorCode.SecurityDecryptionFailed => "SECURITY_DECRYPTION_FAILED",
+        ErrorCode.SecuritySigningFailed => "SECURITY_SIGNING_FAILED",
+        ErrorCode.SecurityKeyRotationFailed => "SECURITY_KEY_ROTATION_FAILED",
         _ => code.ToString()
     };
 }
