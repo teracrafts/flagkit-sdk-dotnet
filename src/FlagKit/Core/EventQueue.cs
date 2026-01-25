@@ -58,12 +58,15 @@ public record BatchEventsRequest
 /// </summary>
 public class EventQueue : IDisposable, IAsyncDisposable
 {
-    private readonly ConcurrentQueue<AnalyticsEvent> _queue = new();
+    private readonly ConcurrentQueue<(AnalyticsEvent Event, string? PersistedEventId)> _queue = new();
     private readonly int _batchSize;
     private readonly TimeSpan _flushInterval;
     private readonly Func<List<AnalyticsEvent>, Task> _onFlush;
     private readonly SemaphoreSlim _flushLock = new(1, 1);
     private readonly CancellationTokenSource _disposalCts = new();
+    private readonly EventPersistence? _persistence;
+    private readonly Action<string>? _logWarning;
+    private readonly Action<string>? _logInfo;
 
     private Timer? _flushTimer;
     private bool _isRunning;
@@ -75,15 +78,29 @@ public class EventQueue : IDisposable, IAsyncDisposable
     /// <param name="batchSize">Maximum events per batch (default: 10).</param>
     /// <param name="flushInterval">Time between automatic flushes (default: 30 seconds).</param>
     /// <param name="onFlush">Callback to send events to the server.</param>
+    /// <param name="persistence">Optional event persistence for crash-resilient event delivery.</param>
+    /// <param name="logWarning">Optional warning logging callback.</param>
+    /// <param name="logInfo">Optional info logging callback.</param>
     public EventQueue(
         int batchSize,
         TimeSpan flushInterval,
-        Func<List<AnalyticsEvent>, Task> onFlush)
+        Func<List<AnalyticsEvent>, Task> onFlush,
+        EventPersistence? persistence = null,
+        Action<string>? logWarning = null,
+        Action<string>? logInfo = null)
     {
         _batchSize = batchSize > 0 ? batchSize : 10;
         _flushInterval = flushInterval > TimeSpan.Zero ? flushInterval : TimeSpan.FromSeconds(30);
         _onFlush = onFlush ?? throw new ArgumentNullException(nameof(onFlush));
+        _persistence = persistence;
+        _logWarning = logWarning;
+        _logInfo = logInfo;
     }
+
+    /// <summary>
+    /// Gets whether event persistence is enabled.
+    /// </summary>
+    public bool IsPersistenceEnabled => _persistence != null;
 
     /// <summary>
     /// Gets the number of events currently in the queue.
@@ -97,12 +114,32 @@ public class EventQueue : IDisposable, IAsyncDisposable
 
     /// <summary>
     /// Starts the auto-flush timer.
+    /// If persistence is enabled, recovers any pending events from disk.
     /// </summary>
     public void Start()
     {
         if (_disposed) return;
 
         if (Volatile.Read(ref _isRunning)) return;
+
+        // Recover persisted events on startup
+        if (_persistence != null)
+        {
+            try
+            {
+                var recoveredEvents = _persistence.Recover();
+                foreach (var evt in recoveredEvents)
+                {
+                    // Queue recovered events without re-persisting (they're already on disk)
+                    _queue.Enqueue((evt, null));
+                }
+                _logInfo?.Invoke($"Recovered {recoveredEvents.Count} events from persistence");
+            }
+            catch (Exception ex)
+            {
+                _logWarning?.Invoke($"Failed to recover persisted events: {ex.Message}");
+            }
+        }
 
         Volatile.Write(ref _isRunning, true);
         _flushTimer = new Timer(
@@ -125,13 +162,29 @@ public class EventQueue : IDisposable, IAsyncDisposable
     /// <summary>
     /// Adds an event to the queue.
     /// Triggers an immediate flush if the batch size is reached.
+    /// If persistence is enabled, the event is persisted to disk before queuing.
     /// </summary>
     /// <param name="evt">The event to add.</param>
     public void Enqueue(AnalyticsEvent evt)
     {
         if (_disposed) return;
 
-        _queue.Enqueue(evt);
+        string? persistedEventId = null;
+
+        // Persist event BEFORE queuing (crash-safe)
+        if (_persistence != null)
+        {
+            try
+            {
+                persistedEventId = _persistence.Persist(evt);
+            }
+            catch (Exception ex)
+            {
+                _logWarning?.Invoke($"Failed to persist event, queuing without persistence: {ex.Message}");
+            }
+        }
+
+        _queue.Enqueue((evt, persistedEventId));
 
         // Trigger flush if batch size reached
         if (_queue.Count >= _batchSize)
@@ -239,14 +292,33 @@ public class EventQueue : IDisposable, IAsyncDisposable
             {
                 // Flush all events, not just a batch
                 var events = new List<AnalyticsEvent>();
-                while (_queue.TryDequeue(out var evt))
+                var persistedEventIds = new List<string>();
+
+                while (_queue.TryDequeue(out var item))
                 {
-                    events.Add(evt);
+                    events.Add(item.Event);
+                    if (item.PersistedEventId != null)
+                    {
+                        persistedEventIds.Add(item.PersistedEventId);
+                    }
                 }
 
                 if (events.Count > 0)
                 {
                     await _onFlush(events);
+
+                    // Mark persisted events as sent after successful flush
+                    if (_persistence != null && persistedEventIds.Count > 0)
+                    {
+                        try
+                        {
+                            _persistence.MarkSent(persistedEventIds);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logWarning?.Invoke($"Failed to mark events as sent: {ex.Message}");
+                        }
+                    }
                 }
             }
             finally
@@ -263,10 +335,12 @@ public class EventQueue : IDisposable, IAsyncDisposable
     private async Task FlushInternalAsync(CancellationToken cancellationToken)
     {
         var events = new List<AnalyticsEvent>();
+        var items = new List<(AnalyticsEvent Event, string? PersistedEventId)>();
 
-        while (events.Count < _batchSize && _queue.TryDequeue(out var evt))
+        while (events.Count < _batchSize && _queue.TryDequeue(out var item))
         {
-            events.Add(evt);
+            events.Add(item.Event);
+            items.Add(item);
         }
 
         if (events.Count == 0) return;
@@ -275,22 +349,43 @@ public class EventQueue : IDisposable, IAsyncDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             await _onFlush(events);
+
+            // Mark persisted events as sent after successful flush
+            if (_persistence != null)
+            {
+                var persistedEventIds = items
+                    .Where(i => i.PersistedEventId != null)
+                    .Select(i => i.PersistedEventId!)
+                    .ToList();
+
+                if (persistedEventIds.Count > 0)
+                {
+                    try
+                    {
+                        await _persistence.MarkSentAsync(persistedEventIds, cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logWarning?.Invoke($"Failed to mark events as sent: {ex.Message}");
+                    }
+                }
+            }
         }
         catch (OperationCanceledException)
         {
             // Re-queue events on cancellation
-            foreach (var evt in events)
+            foreach (var item in items)
             {
-                _queue.Enqueue(evt);
+                _queue.Enqueue(item);
             }
             throw;
         }
         catch
         {
             // Re-queue events on failure
-            foreach (var evt in events)
+            foreach (var item in items)
             {
-                _queue.Enqueue(evt);
+                _queue.Enqueue(item);
             }
         }
     }
@@ -343,6 +438,9 @@ public class EventQueue : IDisposable, IAsyncDisposable
             _flushTimer = null;
             _flushLock.Dispose();
             _disposalCts.Dispose();
+
+            // Dispose persistence (will flush remaining events)
+            _persistence?.Dispose();
         }
 
         _disposed = true;
@@ -365,6 +463,9 @@ public class EventQueue : IDisposable, IAsyncDisposable
         _disposalCts.Cancel();
         _flushLock.Dispose();
         _disposalCts.Dispose();
+
+        // Dispose persistence (will flush remaining events and cleanup)
+        _persistence?.Dispose();
 
         _disposed = true;
     }
