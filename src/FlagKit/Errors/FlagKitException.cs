@@ -5,6 +5,27 @@ namespace FlagKit.Errors;
 /// </summary>
 public class FlagKitException : Exception
 {
+    private static ErrorSanitizationConfig _sanitizationConfig = new();
+
+    /// <summary>
+    /// Configures error message sanitization globally for all FlagKitExceptions.
+    /// </summary>
+    /// <param name="config">The sanitization configuration to use.</param>
+    public static void ConfigureSanitization(ErrorSanitizationConfig config)
+    {
+        _sanitizationConfig = config ?? new ErrorSanitizationConfig();
+    }
+
+    /// <summary>
+    /// Gets the current sanitization configuration.
+    /// </summary>
+    public static ErrorSanitizationConfig SanitizationConfig => _sanitizationConfig;
+
+    /// <summary>
+    /// The original unsanitized message, if PreserveOriginal is enabled.
+    /// </summary>
+    public string? OriginalMessage { get; }
+
     public ErrorCode ErrorCode { get; }
     public ErrorCode Code => ErrorCode;
     public bool IsRecoverable => ErrorCode.IsRecoverable();
@@ -55,9 +76,19 @@ public class FlagKitException : Exception
         ErrorCode.SdkNotReady;
 
     public FlagKitException(ErrorCode errorCode, string message, Exception? innerException = null)
-        : base($"[{errorCode.ToCode()}] {message}", innerException)
+        : base(FormatMessage(errorCode, message), innerException)
     {
         ErrorCode = errorCode;
+        if (_sanitizationConfig.PreserveOriginal && _sanitizationConfig.Enabled)
+        {
+            OriginalMessage = $"[{errorCode.ToCode()}] {message}";
+        }
+    }
+
+    private static string FormatMessage(ErrorCode errorCode, string message)
+    {
+        var sanitizedMessage = ErrorSanitizer.Sanitize(message, _sanitizationConfig.Enabled);
+        return $"[{errorCode.ToCode()}] {sanitizedMessage}";
     }
 
     public static FlagKitException InitError(string message) =>

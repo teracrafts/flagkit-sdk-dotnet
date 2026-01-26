@@ -53,6 +53,25 @@ public record BootstrapVerificationConfig
 }
 
 /// <summary>
+/// Configuration for error message sanitization to prevent information leakage.
+/// </summary>
+public record ErrorSanitizationConfig
+{
+    /// <summary>
+    /// Whether error message sanitization is enabled.
+    /// Default: true.
+    /// </summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// Whether to preserve the original unsanitized message in the exception data.
+    /// Should only be enabled in development/debugging scenarios.
+    /// Default: false.
+    /// </summary>
+    public bool PreserveOriginal { get; init; } = false;
+}
+
+/// <summary>
 /// Configuration for evaluation jitter to protect against cache timing attacks.
 /// </summary>
 public record EvaluationJitterConfig
@@ -186,6 +205,12 @@ public record FlagKitOptions
     /// </summary>
     public BootstrapVerificationConfig BootstrapVerification { get; init; } = new();
 
+    /// <summary>
+    /// Configuration for error message sanitization to prevent information leakage.
+    /// When enabled, sensitive information like API keys, paths, and IP addresses are redacted from error messages.
+    /// </summary>
+    public ErrorSanitizationConfig ErrorSanitization { get; init; } = new();
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ApiKey))
@@ -251,6 +276,7 @@ public record FlagKitOptions
         private EvaluationJitterConfig _evaluationJitter = new();
         private BootstrapConfig? _bootstrapConfig;
         private BootstrapVerificationConfig _bootstrapVerification = new();
+        private ErrorSanitizationConfig _errorSanitization = new();
 
         public Builder(string apiKey) => _apiKey = apiKey;
 
@@ -277,6 +303,7 @@ public record FlagKitOptions
         public Builder EvaluationJitter(EvaluationJitterConfig config) { _evaluationJitter = config; return this; }
         public Builder BootstrapConfig(BootstrapConfig config) { _bootstrapConfig = config; return this; }
         public Builder BootstrapVerification(BootstrapVerificationConfig config) { _bootstrapVerification = config; return this; }
+        public Builder ErrorSanitization(ErrorSanitizationConfig config) { _errorSanitization = config; return this; }
 
         public FlagKitOptions Build() => new()
         {
@@ -303,7 +330,8 @@ public record FlagKitOptions
             PersistenceFlushInterval = _persistenceFlushInterval,
             EvaluationJitter = _evaluationJitter,
             BootstrapConfig = _bootstrapConfig,
-            BootstrapVerification = _bootstrapVerification
+            BootstrapVerification = _bootstrapVerification,
+            ErrorSanitization = _errorSanitization
         };
     }
 
