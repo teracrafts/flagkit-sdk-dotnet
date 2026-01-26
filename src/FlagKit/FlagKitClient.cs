@@ -354,6 +354,8 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
     /// <returns>The evaluation result.</returns>
     public EvaluationResult Evaluate(string flagKey, EvaluationContext? context = null)
     {
+        ApplyEvaluationJitter();
+
         var mergedContext = _contextManager.ResolveContext(context);
         var flag = _cache.Get(flagKey);
 
@@ -736,6 +738,22 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
             };
             _cache.Set(key, flag);
         }
+    }
+
+    /// <summary>
+    /// Applies evaluation jitter to protect against cache timing attacks.
+    /// </summary>
+    private void ApplyEvaluationJitter()
+    {
+        if (!_options.EvaluationJitter.Enabled)
+        {
+            return;
+        }
+
+        var jitterMs = Random.Shared.Next(
+            _options.EvaluationJitter.MinMs,
+            _options.EvaluationJitter.MaxMs + 1);
+        Thread.Sleep(jitterMs);
     }
 
     /// <summary>

@@ -4,6 +4,30 @@ using System.Security;
 namespace FlagKit;
 
 /// <summary>
+/// Configuration for evaluation jitter to protect against cache timing attacks.
+/// </summary>
+public record EvaluationJitterConfig
+{
+    /// <summary>
+    /// Whether evaluation jitter is enabled.
+    /// Default: false.
+    /// </summary>
+    public bool Enabled { get; init; } = false;
+
+    /// <summary>
+    /// Minimum jitter delay in milliseconds.
+    /// Default: 5.
+    /// </summary>
+    public int MinMs { get; init; } = 5;
+
+    /// <summary>
+    /// Maximum jitter delay in milliseconds.
+    /// Default: 15.
+    /// </summary>
+    public int MaxMs { get; init; } = 15;
+}
+
+/// <summary>
 /// Configuration options for the FlagKit SDK.
 /// </summary>
 public record FlagKitOptions
@@ -95,6 +119,12 @@ public record FlagKitOptions
     /// </summary>
     public TimeSpan PersistenceFlushInterval { get; init; } = DefaultPersistenceFlushInterval;
 
+    /// <summary>
+    /// Configuration for evaluation jitter to protect against cache timing attacks.
+    /// When enabled, adds a random delay to flag evaluations.
+    /// </summary>
+    public EvaluationJitterConfig EvaluationJitter { get; init; } = new();
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ApiKey))
@@ -157,6 +187,7 @@ public record FlagKitOptions
         private string? _eventStoragePath;
         private int _maxPersistedEvents = DefaultMaxPersistedEvents;
         private TimeSpan _persistenceFlushInterval = DefaultPersistenceFlushInterval;
+        private EvaluationJitterConfig _evaluationJitter = new();
 
         public Builder(string apiKey) => _apiKey = apiKey;
 
@@ -180,6 +211,7 @@ public record FlagKitOptions
         public Builder EventStoragePath(string path) { _eventStoragePath = path; return this; }
         public Builder MaxPersistedEvents(int max) { _maxPersistedEvents = max; return this; }
         public Builder PersistenceFlushInterval(TimeSpan interval) { _persistenceFlushInterval = interval; return this; }
+        public Builder EvaluationJitter(EvaluationJitterConfig config) { _evaluationJitter = config; return this; }
 
         public FlagKitOptions Build() => new()
         {
@@ -203,7 +235,8 @@ public record FlagKitOptions
             PersistEvents = _persistEvents,
             EventStoragePath = _eventStoragePath,
             MaxPersistedEvents = _maxPersistedEvents,
-            PersistenceFlushInterval = _persistenceFlushInterval
+            PersistenceFlushInterval = _persistenceFlushInterval,
+            EvaluationJitter = _evaluationJitter
         };
     }
 
