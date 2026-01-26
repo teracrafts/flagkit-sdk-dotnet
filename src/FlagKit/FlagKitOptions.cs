@@ -4,6 +4,55 @@ using System.Security;
 namespace FlagKit;
 
 /// <summary>
+/// Configuration for bootstrap flag values with optional signature verification.
+/// </summary>
+public record BootstrapConfig
+{
+    /// <summary>
+    /// The bootstrap flag values.
+    /// </summary>
+    public Dictionary<string, object?> Flags { get; init; } = new();
+
+    /// <summary>
+    /// Optional HMAC-SHA256 signature for verifying the bootstrap data integrity.
+    /// </summary>
+    public string? Signature { get; init; }
+
+    /// <summary>
+    /// Optional timestamp (Unix milliseconds) when the bootstrap data was generated.
+    /// Used to verify the data is not stale.
+    /// </summary>
+    public long? Timestamp { get; init; }
+}
+
+/// <summary>
+/// Configuration for bootstrap signature verification.
+/// </summary>
+public record BootstrapVerificationConfig
+{
+    /// <summary>
+    /// Whether bootstrap signature verification is enabled.
+    /// Default: true.
+    /// </summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// Maximum age of bootstrap data in milliseconds.
+    /// Default: 86400000 (24 hours).
+    /// </summary>
+    public long MaxAge { get; init; } = 86400000;
+
+    /// <summary>
+    /// Action to take when verification fails.
+    /// "warn" - Log a warning but use the bootstrap data.
+    /// "error" - Throw an exception and reject the bootstrap data.
+    /// "ignore" - Silently ignore verification failures.
+    /// Default: "warn".
+    /// </summary>
+    public string OnFailure { get; init; } = "warn";
+}
+
+/// <summary>
 /// Configuration for evaluation jitter to protect against cache timing attacks.
 /// </summary>
 public record EvaluationJitterConfig
@@ -125,6 +174,18 @@ public record FlagKitOptions
     /// </summary>
     public EvaluationJitterConfig EvaluationJitter { get; init; } = new();
 
+    /// <summary>
+    /// Structured bootstrap configuration with optional signature verification.
+    /// Use this instead of Bootstrap when you need signature verification.
+    /// </summary>
+    public BootstrapConfig? BootstrapConfig { get; init; }
+
+    /// <summary>
+    /// Configuration for bootstrap signature verification.
+    /// Only used when BootstrapConfig is provided with a Signature.
+    /// </summary>
+    public BootstrapVerificationConfig BootstrapVerification { get; init; } = new();
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ApiKey))
@@ -188,6 +249,8 @@ public record FlagKitOptions
         private int _maxPersistedEvents = DefaultMaxPersistedEvents;
         private TimeSpan _persistenceFlushInterval = DefaultPersistenceFlushInterval;
         private EvaluationJitterConfig _evaluationJitter = new();
+        private BootstrapConfig? _bootstrapConfig;
+        private BootstrapVerificationConfig _bootstrapVerification = new();
 
         public Builder(string apiKey) => _apiKey = apiKey;
 
@@ -212,6 +275,8 @@ public record FlagKitOptions
         public Builder MaxPersistedEvents(int max) { _maxPersistedEvents = max; return this; }
         public Builder PersistenceFlushInterval(TimeSpan interval) { _persistenceFlushInterval = interval; return this; }
         public Builder EvaluationJitter(EvaluationJitterConfig config) { _evaluationJitter = config; return this; }
+        public Builder BootstrapConfig(BootstrapConfig config) { _bootstrapConfig = config; return this; }
+        public Builder BootstrapVerification(BootstrapVerificationConfig config) { _bootstrapVerification = config; return this; }
 
         public FlagKitOptions Build() => new()
         {
@@ -236,7 +301,9 @@ public record FlagKitOptions
             EventStoragePath = _eventStoragePath,
             MaxPersistedEvents = _maxPersistedEvents,
             PersistenceFlushInterval = _persistenceFlushInterval,
-            EvaluationJitter = _evaluationJitter
+            EvaluationJitter = _evaluationJitter,
+            BootstrapConfig = _bootstrapConfig,
+            BootstrapVerification = _bootstrapVerification
         };
     }
 

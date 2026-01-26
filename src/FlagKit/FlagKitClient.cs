@@ -1,8 +1,10 @@
+using System.Security;
 using System.Text.Json.Serialization;
 using FlagKit.Core;
 using FlagKit.Errors;
 using FlagKit.Http;
 using FlagKit.Types;
+using FlagKit.Utils;
 
 namespace FlagKit;
 
@@ -170,8 +172,12 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
                 async events => await SendEventsAsync(events));
         }
 
-        // Load bootstrap data if provided
-        if (options.Bootstrap != null)
+        // Load bootstrap data if provided (prefer BootstrapConfig over legacy Bootstrap)
+        if (options.BootstrapConfig != null)
+        {
+            LoadBootstrapConfig(options.BootstrapConfig);
+        }
+        else if (options.Bootstrap != null)
         {
             LoadBootstrap(options.Bootstrap);
         }
@@ -728,6 +734,76 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
     private void LoadBootstrap(Dictionary<string, object> bootstrap)
     {
         foreach (var (key, value) in bootstrap)
+        {
+            var flag = new FlagState
+            {
+                Key = key,
+                Value = FlagValue.From(value),
+                Enabled = true,
+                Version = 0
+            };
+            _cache.Set(key, flag);
+        }
+    }
+
+    private void LoadBootstrapConfig(BootstrapConfig bootstrapConfig)
+    {
+        // Verify signature if present
+        if (!string.IsNullOrEmpty(bootstrapConfig.Signature))
+        {
+            var (valid, error) = Security.VerifyBootstrapSignature(
+                bootstrapConfig,
+                _options.ApiKey,
+                _options.BootstrapVerification);
+
+            if (!valid)
+            {
+                HandleBootstrapVerificationFailure(error ?? "Unknown verification error");
+                return; // Don't load bootstrap data if verification failed with error/warn
+            }
+        }
+
+        // Load the flags from the bootstrap config
+        foreach (var (key, value) in bootstrapConfig.Flags)
+        {
+            var flag = new FlagState
+            {
+                Key = key,
+                Value = FlagValue.From(value),
+                Enabled = true,
+                Version = 0
+            };
+            _cache.Set(key, flag);
+        }
+    }
+
+    private void HandleBootstrapVerificationFailure(string error)
+    {
+        var onFailure = _options.BootstrapVerification.OnFailure.ToLowerInvariant();
+
+        switch (onFailure)
+        {
+            case "error":
+                throw new SecurityException($"[FlagKit Security] Bootstrap verification failed: {error}");
+
+            case "ignore":
+                // Silently ignore and load the bootstrap data anyway
+                LoadBootstrapFlags(_options.BootstrapConfig!.Flags);
+                break;
+
+            case "warn":
+            default:
+                // Log warning (to console since we don't have a logger reference here)
+                Console.WriteLine($"[FlagKit Security] WARNING: Bootstrap verification failed: {error}");
+                // Still load the bootstrap data
+                LoadBootstrapFlags(_options.BootstrapConfig!.Flags);
+                break;
+        }
+    }
+
+    private void LoadBootstrapFlags(Dictionary<string, object?> flags)
+    {
+        foreach (var (key, value) in flags)
         {
             var flag = new FlagState
             {

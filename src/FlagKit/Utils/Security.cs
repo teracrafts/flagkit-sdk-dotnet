@@ -523,6 +523,212 @@ public static class Security
                   ?? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
         return string.Equals(env, "Production", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// Canonicalizes an object for consistent signature generation.
+    /// Keys are sorted alphabetically and values are serialized deterministically.
+    /// </summary>
+    /// <param name="obj">The dictionary to canonicalize.</param>
+    /// <returns>A canonical string representation of the object.</returns>
+    public static string CanonicalizeObject(Dictionary<string, object?> obj)
+    {
+        if (obj == null || obj.Count == 0)
+            return "{}";
+
+        var sortedKeys = obj.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+        var parts = new List<string>();
+
+        foreach (var key in sortedKeys)
+        {
+            var value = obj[key];
+            var valueStr = CanonicalizeValue(value);
+            parts.Add($"\"{EscapeJsonString(key)}\":{valueStr}");
+        }
+
+        return "{" + string.Join(",", parts) + "}";
+    }
+
+    /// <summary>
+    /// Canonicalizes a value for signature generation.
+    /// </summary>
+    private static string CanonicalizeValue(object? value)
+    {
+        return value switch
+        {
+            null => "null",
+            bool b => b ? "true" : "false",
+            string s => $"\"{EscapeJsonString(s)}\"",
+            int or long or short or byte => value.ToString()!,
+            float or double or decimal => FormatNumber(Convert.ToDouble(value)),
+            Dictionary<string, object?> dict => CanonicalizeObject(dict),
+            IDictionary<string, object> dict => CanonicalizeObject(dict.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value)),
+            JsonElement jsonElement => CanonicalizeJsonElement(jsonElement),
+            System.Collections.IEnumerable arr when arr is not string => "[" + string.Join(",", arr.Cast<object?>().Select(CanonicalizeValue)) + "]",
+            _ => $"\"{EscapeJsonString(value.ToString() ?? "")}\"",
+        };
+    }
+
+    /// <summary>
+    /// Canonicalizes a JsonElement for signature generation.
+    /// </summary>
+    private static string CanonicalizeJsonElement(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Null => "null",
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Number => FormatNumber(element.GetDouble()),
+            JsonValueKind.String => $"\"{EscapeJsonString(element.GetString() ?? "")}\"",
+            JsonValueKind.Array => "[" + string.Join(",", element.EnumerateArray().Select(CanonicalizeJsonElement)) + "]",
+            JsonValueKind.Object => CanonicalizeJsonObject(element),
+            _ => "null"
+        };
+    }
+
+    /// <summary>
+    /// Canonicalizes a JSON object element with sorted keys.
+    /// </summary>
+    private static string CanonicalizeJsonObject(JsonElement element)
+    {
+        var properties = element.EnumerateObject()
+            .OrderBy(p => p.Name, StringComparer.Ordinal)
+            .Select(p => $"\"{EscapeJsonString(p.Name)}\":{CanonicalizeJsonElement(p.Value)}");
+        return "{" + string.Join(",", properties) + "}";
+    }
+
+    /// <summary>
+    /// Formats a number for canonical JSON representation.
+    /// </summary>
+    private static string FormatNumber(double value)
+    {
+        // Use invariant culture to ensure consistent decimal separators
+        if (value == Math.Truncate(value) && Math.Abs(value) < 1e15)
+        {
+            return ((long)value).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        return value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Escapes a string for JSON representation.
+    /// </summary>
+    private static string EscapeJsonString(string s)
+    {
+        var sb = new StringBuilder();
+        foreach (var c in s)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < 0x20)
+                    {
+                        sb.Append($"\\u{(int)c:x4}");
+                    }
+                    else
+                    {
+                        sb.Append(c);
+                    }
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Verifies a bootstrap signature using HMAC-SHA256.
+    /// </summary>
+    /// <param name="bootstrap">The bootstrap configuration containing flags, signature, and timestamp.</param>
+    /// <param name="apiKey">The API key used for signature verification.</param>
+    /// <param name="config">The verification configuration.</param>
+    /// <returns>A tuple containing whether the signature is valid and an optional error message.</returns>
+    public static (bool Valid, string? Error) VerifyBootstrapSignature(
+        BootstrapConfig bootstrap,
+        string apiKey,
+        BootstrapVerificationConfig config)
+    {
+        if (bootstrap == null)
+            return (false, "Bootstrap config is null");
+
+        if (!config.Enabled)
+            return (true, null);
+
+        if (string.IsNullOrEmpty(bootstrap.Signature))
+            return (true, null); // No signature to verify, allow unsigned bootstrap
+
+        // Verify timestamp if present
+        if (bootstrap.Timestamp.HasValue)
+        {
+            var currentTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var age = currentTime - bootstrap.Timestamp.Value;
+
+            if (age > config.MaxAge)
+            {
+                return (false, $"Bootstrap data has expired. Age: {age}ms, MaxAge: {config.MaxAge}ms");
+            }
+
+            if (age < 0)
+            {
+                return (false, "Bootstrap timestamp is in the future");
+            }
+        }
+
+        // Create canonical representation and compute expected signature
+        var canonicalData = CanonicalizeObject(bootstrap.Flags);
+        var message = bootstrap.Timestamp.HasValue
+            ? $"{bootstrap.Timestamp.Value}.{canonicalData}"
+            : canonicalData;
+
+        var expectedSignature = GenerateHMACSHA256(message, apiKey);
+
+        // Use constant-time comparison to prevent timing attacks
+        var expectedBytes = Encoding.UTF8.GetBytes(expectedSignature.ToLowerInvariant());
+        var actualBytes = Encoding.UTF8.GetBytes(bootstrap.Signature.ToLowerInvariant());
+
+        if (expectedBytes.Length != actualBytes.Length)
+        {
+            return (false, "Invalid bootstrap signature");
+        }
+
+        if (!CryptographicOperations.FixedTimeEquals(expectedBytes, actualBytes))
+        {
+            return (false, "Invalid bootstrap signature");
+        }
+
+        return (true, null);
+    }
+
+    /// <summary>
+    /// Creates a signed bootstrap configuration.
+    /// </summary>
+    /// <param name="flags">The flag values to include in the bootstrap.</param>
+    /// <param name="apiKey">The API key to use for signing.</param>
+    /// <param name="timestamp">Optional timestamp (defaults to current time).</param>
+    /// <returns>A BootstrapConfig with signature.</returns>
+    public static BootstrapConfig CreateSignedBootstrap(
+        Dictionary<string, object?> flags,
+        string apiKey,
+        long? timestamp = null)
+    {
+        var ts = timestamp ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var canonicalData = CanonicalizeObject(flags);
+        var message = $"{ts}.{canonicalData}";
+        var signature = GenerateHMACSHA256(message, apiKey);
+
+        return new BootstrapConfig
+        {
+            Flags = flags,
+            Signature = signature,
+            Timestamp = ts
+        };
+    }
 }
 
 /// <summary>
