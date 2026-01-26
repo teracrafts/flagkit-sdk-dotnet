@@ -12,7 +12,7 @@ public static class ErrorSanitizer
         // Unix-style paths
         (new Regex(@"/(?:[\w.-]+/)+[\w.-]+", RegexOptions.Compiled), "[PATH]"),
         // Windows-style paths
-        (new Regex(@"[A-Za-z]:\\(?:[\w.-]+\\)+[\w.-]*", RegexOptions.Compiled), "[PATH]"),
+        (new Regex(@"[A-Za-z]:\\(?:[\w\s.-]+\\)+[\w.-]*", RegexOptions.Compiled), "[PATH]"),
         // IP addresses
         (new Regex(@"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", RegexOptions.Compiled), "[IP]"),
         // SDK API keys
@@ -22,7 +22,7 @@ public static class ErrorSanitizer
         // CLI API keys
         (new Regex(@"cli_[a-zA-Z0-9_-]{8,}", RegexOptions.Compiled), "cli_[REDACTED]"),
         // Email addresses
-        (new Regex(@"[\w.-]+@[\w.-]+\.\w+", RegexOptions.Compiled), "[EMAIL]"),
+        (new Regex(@"[\w.+-]+@[\w.-]+\.\w+", RegexOptions.Compiled), "[EMAIL]"),
         // Database connection strings
         (new Regex(@"(?i)(?:postgres|mysql|mongodb|redis)://[^\s]+", RegexOptions.Compiled), "[CONNECTION_STRING]"),
     };
