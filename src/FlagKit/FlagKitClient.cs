@@ -138,6 +138,7 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
     private readonly FlagKitHttpClient _httpClient;
     private readonly FlagCache _cache;
     private readonly PollingManager _pollingManager;
+    private readonly StreamingManager? _streamingManager;
     private readonly EventQueue? _eventQueue;
     private readonly ContextManager _contextManager;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
@@ -146,6 +147,7 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
     private bool _disposed;
     private TaskCompletionSource<bool>? _readyTcs;
     private DateTime? _lastServerTime;
+    private DateTime? _lastUpdated;
 
     /// <summary>
     /// Creates a new FlagKit client with the specified options.
@@ -163,6 +165,20 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
         _pollingManager = new PollingManager(
             options.PollingInterval,
             async since => await PollForUpdatesAsync(since));
+
+        // Initialize streaming if enabled
+        if (options.StreamingEnabled)
+        {
+            var baseUrl = FlagKitHttpClient.GetBaseUrl(options.LocalPort);
+            _streamingManager = new StreamingManager(
+                baseUrl,
+                () => _httpClient.CurrentApiKey,
+                options.Streaming,
+                HandleStreamFlagUpdate,
+                HandleStreamFlagDelete,
+                HandleStreamFlagsReset,
+                HandleStreamingFallback);
+        }
 
         if (options.EventsEnabled)
         {
@@ -209,6 +225,21 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
     public int CachedFlagCount => _cache.Count;
 
     /// <summary>
+    /// Gets whether streaming is connected.
+    /// </summary>
+    public bool IsStreamingConnected => _streamingManager?.IsConnected ?? false;
+
+    /// <summary>
+    /// Gets the current streaming state.
+    /// </summary>
+    public StreamingState? StreamingState => _streamingManager?.State;
+
+    /// <summary>
+    /// Gets the timestamp of the last flag update (via streaming or polling).
+    /// </summary>
+    public DateTime? LastUpdated => _lastUpdated;
+
+    /// <summary>
     /// Initializes the SDK by fetching all flags from the server.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -240,7 +271,15 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
                 Volatile.Write(ref _initialized, true);
                 _readyTcs?.TrySetResult(true);
 
-                _pollingManager.Start();
+                // Start streaming if enabled, otherwise fall back to polling
+                if (_streamingManager != null)
+                {
+                    _streamingManager.Connect();
+                }
+                else
+                {
+                    _pollingManager.Start();
+                }
                 _eventQueue?.Start();
             }
             catch (Exception ex)
@@ -702,6 +741,49 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Handle flag update from streaming.
+    /// </summary>
+    private void HandleStreamFlagUpdate(FlagState flag)
+    {
+        _cache.Set(flag.Key, flag);
+        _lastUpdated = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Handle flag deletion from streaming.
+    /// </summary>
+    private void HandleStreamFlagDelete(string key)
+    {
+        _cache.Remove(key);
+        _lastUpdated = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Handle flags reset from streaming.
+    /// </summary>
+    private void HandleStreamFlagsReset(List<FlagState> flags)
+    {
+        _cache.Clear();
+        foreach (var flag in flags)
+        {
+            _cache.Set(flag.Key, flag);
+        }
+        _lastUpdated = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Handle streaming fallback to polling.
+    /// </summary>
+    private void HandleStreamingFallback()
+    {
+        // Start polling as a fallback
+        if (!_pollingManager.IsPolling)
+        {
+            _pollingManager.Start();
+        }
+    }
+
     private async Task PollForUpdatesAsync(DateTime? since)
     {
         var path = since.HasValue
@@ -860,6 +942,7 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
 
         if (disposing)
         {
+            _streamingManager?.Dispose();
             _pollingManager.Dispose();
             _eventQueue?.Dispose();
             _httpClient.Dispose();
@@ -889,6 +972,10 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
             }
         }
 
+        if (_streamingManager != null)
+        {
+            await _streamingManager.DisposeAsync();
+        }
         _pollingManager.Dispose();
         _eventQueue?.Dispose();
         _httpClient.Dispose();
