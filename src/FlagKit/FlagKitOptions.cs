@@ -1,3 +1,4 @@
+using FlagKit.Core;
 using FlagKit.Errors;
 using System.Security;
 
@@ -211,6 +212,19 @@ public record FlagKitOptions
     /// </summary>
     public ErrorSanitizationConfig ErrorSanitization { get; init; } = new();
 
+    /// <summary>
+    /// Whether real-time streaming is enabled.
+    /// When enabled, the SDK uses Server-Sent Events (SSE) for instant flag updates (~200ms latency).
+    /// Falls back to polling if streaming fails.
+    /// Default: true.
+    /// </summary>
+    public bool StreamingEnabled { get; init; } = true;
+
+    /// <summary>
+    /// Configuration for streaming behavior.
+    /// </summary>
+    public StreamingConfig Streaming { get; init; } = new();
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ApiKey))
@@ -277,6 +291,8 @@ public record FlagKitOptions
         private BootstrapConfig? _bootstrapConfig;
         private BootstrapVerificationConfig _bootstrapVerification = new();
         private ErrorSanitizationConfig _errorSanitization = new();
+        private bool _streamingEnabled = true;
+        private StreamingConfig _streaming = new();
 
         public Builder(string apiKey) => _apiKey = apiKey;
 
@@ -304,6 +320,8 @@ public record FlagKitOptions
         public Builder BootstrapConfig(BootstrapConfig config) { _bootstrapConfig = config; return this; }
         public Builder BootstrapVerification(BootstrapVerificationConfig config) { _bootstrapVerification = config; return this; }
         public Builder ErrorSanitization(ErrorSanitizationConfig config) { _errorSanitization = config; return this; }
+        public Builder StreamingEnabled(bool enabled) { _streamingEnabled = enabled; return this; }
+        public Builder Streaming(StreamingConfig config) { _streaming = config; return this; }
 
         public FlagKitOptions Build() => new()
         {
@@ -331,7 +349,9 @@ public record FlagKitOptions
             EvaluationJitter = _evaluationJitter,
             BootstrapConfig = _bootstrapConfig,
             BootstrapVerification = _bootstrapVerification,
-            ErrorSanitization = _errorSanitization
+            ErrorSanitization = _errorSanitization,
+            StreamingEnabled = _streamingEnabled,
+            Streaming = _streaming
         };
     }
 
