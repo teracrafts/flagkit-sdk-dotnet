@@ -9,11 +9,44 @@ using FlagKit.Utils;
 namespace FlagKit.Http;
 
 /// <summary>
+/// Usage metrics extracted from response headers.
+/// </summary>
+public record UsageMetrics
+{
+    /// <summary>
+    /// Percentage of API call limit used this period (0-150+).
+    /// </summary>
+    public double? ApiUsagePercent { get; init; }
+
+    /// <summary>
+    /// Percentage of evaluation limit used (0-150+).
+    /// </summary>
+    public double? EvaluationUsagePercent { get; init; }
+
+    /// <summary>
+    /// Whether approaching rate limit threshold.
+    /// </summary>
+    public bool RateLimitWarning { get; init; }
+
+    /// <summary>
+    /// Current subscription status.
+    /// </summary>
+    public string? SubscriptionStatus { get; init; }
+}
+
+/// <summary>
+/// Callback type for usage metrics updates.
+/// </summary>
+public delegate void UsageUpdateCallback(UsageMetrics metrics);
+
+/// <summary>
 /// HTTP client with retry logic, circuit breaker, request signing, and key rotation.
 /// </summary>
 public class FlagKitHttpClient : IDisposable
 {
     internal const string DefaultBaseUrl = "https://api.flagkit.dev/api/v1";
+
+    private static readonly string[] ValidSubscriptionStatuses = { "active", "trial", "past_due", "suspended", "cancelled" };
 
     private readonly HttpClient _httpClient;
     private readonly CircuitBreaker _circuitBreaker;
@@ -60,7 +93,7 @@ public class FlagKitHttpClient : IDisposable
             var request = new HttpRequestMessage(HttpMethod.Get, path);
             request.Headers.Add("X-API-Key", apiKey);
             var response = await _httpClient.SendAsync(request, cancellationToken);
-            return await HandleResponseAsync<T>(response, cancellationToken);
+            return await HandleResponseWithMetricsAsync<T>(response, cancellationToken);
         }, cancellationToken);
     }
 
@@ -103,7 +136,7 @@ public class FlagKitHttpClient : IDisposable
         {
             var request = CreateSignedPostRequest(path, body, apiKey);
             var response = await _httpClient.SendAsync(request, cancellationToken);
-            return await HandleResponseAsync<TResponse>(response, cancellationToken);
+            return await HandleResponseWithMetricsAsync<TResponse>(response, cancellationToken);
         }, cancellationToken);
     }
 
@@ -116,7 +149,7 @@ public class FlagKitHttpClient : IDisposable
         {
             var request = CreateSignedPostRequest(path, body, apiKey);
             var response = await _httpClient.SendAsync(request, cancellationToken);
-            await EnsureSuccessAsync(response, cancellationToken);
+            await EnsureSuccessWithMetricsAsync(response, cancellationToken);
             return true;
         }, cancellationToken);
     }
@@ -249,11 +282,11 @@ public class FlagKitHttpClient : IDisposable
         return TimeSpan.FromMilliseconds(delay);
     }
 
-    private static async Task<T> HandleResponseAsync<T>(
+    private async Task<T> HandleResponseWithMetricsAsync<T>(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
-        await EnsureSuccessAsync(response, cancellationToken);
+        await EnsureSuccessWithMetricsAsync(response, cancellationToken);
 
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
 
@@ -272,10 +305,17 @@ public class FlagKitHttpClient : IDisposable
         }
     }
 
-    private static async Task EnsureSuccessAsync(
+    private async Task EnsureSuccessWithMetricsAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
+        // Extract and process usage metrics from headers
+        var usageMetrics = ExtractUsageMetrics(response);
+        if (usageMetrics != null)
+        {
+            ProcessUsageMetrics(usageMetrics);
+        }
+
         if (response.IsSuccessStatusCode) return;
 
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -299,6 +339,94 @@ public class FlagKitHttpClient : IDisposable
         throw FlagKitException.NetworkError(
             errorCode,
             $"{category}: {statusCode} - {content}");
+    }
+
+    /// <summary>
+    /// Extract usage metrics from response headers.
+    /// </summary>
+    /// <param name="response">The HTTP response.</param>
+    /// <returns>UsageMetrics if any usage headers present, null otherwise.</returns>
+    private UsageMetrics? ExtractUsageMetrics(HttpResponseMessage response)
+    {
+        var headers = response.Headers;
+
+        string? apiUsage = null;
+        string? evalUsage = null;
+        string? rateLimitWarning = null;
+        string? subscriptionStatus = null;
+
+        if (headers.TryGetValues("X-API-Usage-Percent", out var apiUsageValues))
+            apiUsage = apiUsageValues.FirstOrDefault();
+        if (headers.TryGetValues("X-Evaluation-Usage-Percent", out var evalUsageValues))
+            evalUsage = evalUsageValues.FirstOrDefault();
+        if (headers.TryGetValues("X-Rate-Limit-Warning", out var rateLimitValues))
+            rateLimitWarning = rateLimitValues.FirstOrDefault();
+        if (headers.TryGetValues("X-Subscription-Status", out var statusValues))
+            subscriptionStatus = statusValues.FirstOrDefault();
+
+        // Return null if no usage headers present
+        if (string.IsNullOrEmpty(apiUsage) &&
+            string.IsNullOrEmpty(evalUsage) &&
+            string.IsNullOrEmpty(rateLimitWarning) &&
+            string.IsNullOrEmpty(subscriptionStatus))
+        {
+            return null;
+        }
+
+        double? apiUsagePercent = null;
+        double? evalUsagePercent = null;
+
+        if (!string.IsNullOrEmpty(apiUsage) && double.TryParse(apiUsage, out var apiParsed))
+        {
+            apiUsagePercent = apiParsed;
+        }
+
+        if (!string.IsNullOrEmpty(evalUsage) && double.TryParse(evalUsage, out var evalParsed))
+        {
+            evalUsagePercent = evalParsed;
+        }
+
+        // Validate subscription status
+        string? validatedStatus = null;
+        if (!string.IsNullOrEmpty(subscriptionStatus) &&
+            ValidSubscriptionStatuses.Contains(subscriptionStatus.ToLowerInvariant()))
+        {
+            validatedStatus = subscriptionStatus.ToLowerInvariant();
+        }
+
+        return new UsageMetrics
+        {
+            ApiUsagePercent = apiUsagePercent,
+            EvaluationUsagePercent = evalUsagePercent,
+            RateLimitWarning = string.Equals(rateLimitWarning, "true", StringComparison.OrdinalIgnoreCase),
+            SubscriptionStatus = validatedStatus
+        };
+    }
+
+    /// <summary>
+    /// Process usage metrics by logging warnings and invoking callbacks.
+    /// </summary>
+    /// <param name="metrics">The usage metrics to process.</param>
+    private void ProcessUsageMetrics(UsageMetrics metrics)
+    {
+        // Log warnings for high usage
+        if (metrics.ApiUsagePercent.HasValue && metrics.ApiUsagePercent >= 80)
+        {
+            Console.WriteLine($"[FlagKit] WARNING: API usage at {metrics.ApiUsagePercent}%");
+        }
+
+        if (metrics.EvaluationUsagePercent.HasValue && metrics.EvaluationUsagePercent >= 80)
+        {
+            Console.WriteLine($"[FlagKit] WARNING: Evaluation usage at {metrics.EvaluationUsagePercent}%");
+        }
+
+        if (metrics.SubscriptionStatus == "suspended")
+        {
+            Console.WriteLine("[FlagKit] ERROR: Subscription suspended - service degraded");
+        }
+
+        // Invoke callback if configured
+        _options.OnUsageUpdate?.Invoke(metrics);
     }
 
     private static string GetVersion()
