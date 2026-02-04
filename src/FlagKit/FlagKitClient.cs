@@ -177,7 +177,9 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
                 HandleStreamFlagUpdate,
                 HandleStreamFlagDelete,
                 HandleStreamFlagsReset,
-                HandleStreamingFallback);
+                HandleStreamingFallback,
+                options.OnSubscriptionError,
+                options.OnConnectionLimitError);
         }
 
         if (options.EventsEnabled)
