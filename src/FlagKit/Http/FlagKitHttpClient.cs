@@ -84,6 +84,8 @@ public class FlagKitHttpClient : IDisposable
 
         // Note: API key is now added per-request to support key rotation
         _httpClient.DefaultRequestHeaders.Add("User-Agent", $"FlagKit-DotNet/{GetVersion()}");
+        _httpClient.DefaultRequestHeaders.Add("X-FlagKit-SDK-Version", GetVersion());
+        _httpClient.DefaultRequestHeaders.Add("X-FlagKit-SDK-Language", "dotnet");
     }
 
     public async Task<T> GetAsync<T>(string path, CancellationToken cancellationToken = default)
