@@ -17,11 +17,17 @@ public enum ErrorCode
     AuthMissingKey,
     AuthUnauthorized,
     AuthPermissionDenied,
+    AuthEnvironmentMismatch,
+    AuthIpRestricted = 1107,
+    AuthOrganizationRequired = 1108,
+    AuthSubscriptionSuspended = 1109,
 
     // Network errors
     NetworkError,
     NetworkTimeout,
     NetworkRetryLimit,
+    NetworkInvalidResponse,
+    NetworkServiceUnavailable = 1308,
 
     // Evaluation errors
     EvalFlagNotFound,
@@ -88,7 +94,14 @@ public enum ErrorCode
     SecurityEncryptionFailed,
     SecurityDecryptionFailed,
     SecuritySigningFailed,
-    SecurityKeyRotationFailed
+    SecurityKeyRotationFailed,
+
+    // Streaming errors (1800-1899)
+    StreamingTokenInvalid = 1800,
+    StreamingTokenExpired = 1801,
+    StreamingSubscriptionSuspended = 1802,
+    StreamingConnectionLimit = 1803,
+    StreamingUnavailable = 1804
 }
 
 public static class ErrorCodeExtensions
@@ -98,6 +111,7 @@ public static class ErrorCodeExtensions
         ErrorCode.NetworkError,
         ErrorCode.NetworkTimeout,
         ErrorCode.NetworkRetryLimit,
+        ErrorCode.NetworkServiceUnavailable,
         ErrorCode.CircuitOpen,
         ErrorCode.HttpCircuitOpen,
         ErrorCode.HttpTimeout,
@@ -108,7 +122,11 @@ public static class ErrorCodeExtensions
         ErrorCode.EvalStaleValue,
         ErrorCode.EvalCacheMiss,
         ErrorCode.EvalNetworkError,
-        ErrorCode.EventSendFailed
+        ErrorCode.EventSendFailed,
+        ErrorCode.StreamingTokenInvalid,
+        ErrorCode.StreamingTokenExpired,
+        ErrorCode.StreamingConnectionLimit,
+        ErrorCode.StreamingUnavailable
     };
 
     public static bool IsRecoverable(this ErrorCode code) => RecoverableCodes.Contains(code);
@@ -124,9 +142,15 @@ public static class ErrorCodeExtensions
         ErrorCode.AuthMissingKey => "AUTH_MISSING_KEY",
         ErrorCode.AuthUnauthorized => "AUTH_UNAUTHORIZED",
         ErrorCode.AuthPermissionDenied => "AUTH_PERMISSION_DENIED",
+        ErrorCode.AuthEnvironmentMismatch => "AUTH_ENVIRONMENT_MISMATCH",
+        ErrorCode.AuthIpRestricted => "AUTH_IP_RESTRICTED",
+        ErrorCode.AuthOrganizationRequired => "AUTH_ORGANIZATION_REQUIRED",
+        ErrorCode.AuthSubscriptionSuspended => "AUTH_SUBSCRIPTION_SUSPENDED",
         ErrorCode.NetworkError => "NETWORK_ERROR",
         ErrorCode.NetworkTimeout => "NETWORK_TIMEOUT",
         ErrorCode.NetworkRetryLimit => "NETWORK_RETRY_LIMIT",
+        ErrorCode.NetworkInvalidResponse => "NETWORK_INVALID_RESPONSE",
+        ErrorCode.NetworkServiceUnavailable => "NETWORK_SERVICE_UNAVAILABLE",
         ErrorCode.EvalFlagNotFound => "EVAL_FLAG_NOT_FOUND",
         ErrorCode.EvalTypeMismatch => "EVAL_TYPE_MISMATCH",
         ErrorCode.EvalInvalidKey => "EVAL_INVALID_KEY",
@@ -178,6 +202,11 @@ public static class ErrorCodeExtensions
         ErrorCode.SecurityDecryptionFailed => "SECURITY_DECRYPTION_FAILED",
         ErrorCode.SecuritySigningFailed => "SECURITY_SIGNING_FAILED",
         ErrorCode.SecurityKeyRotationFailed => "SECURITY_KEY_ROTATION_FAILED",
+        ErrorCode.StreamingTokenInvalid => "STREAMING_TOKEN_INVALID",
+        ErrorCode.StreamingTokenExpired => "STREAMING_TOKEN_EXPIRED",
+        ErrorCode.StreamingSubscriptionSuspended => "STREAMING_SUBSCRIPTION_SUSPENDED",
+        ErrorCode.StreamingConnectionLimit => "STREAMING_CONNECTION_LIMIT",
+        ErrorCode.StreamingUnavailable => "STREAMING_UNAVAILABLE",
         _ => code.ToString()
     };
 }
