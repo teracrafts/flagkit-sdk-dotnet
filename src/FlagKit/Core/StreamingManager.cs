@@ -22,7 +22,64 @@ public enum StreamEventType
     FlagsReset,
 
     [JsonPropertyName("heartbeat")]
-    Heartbeat
+    Heartbeat,
+
+    [JsonPropertyName("error")]
+    Error
+}
+
+/// <summary>
+/// SSE error codes from server.
+/// </summary>
+public enum StreamErrorCode
+{
+    /// <summary>
+    /// Token is invalid, re-authenticate completely.
+    /// </summary>
+    [JsonPropertyName("TOKEN_INVALID")]
+    TokenInvalid,
+
+    /// <summary>
+    /// Token has expired, refresh token and reconnect.
+    /// </summary>
+    [JsonPropertyName("TOKEN_EXPIRED")]
+    TokenExpired,
+
+    /// <summary>
+    /// Subscription is suspended, notify user and fall back to cached values.
+    /// </summary>
+    [JsonPropertyName("SUBSCRIPTION_SUSPENDED")]
+    SubscriptionSuspended,
+
+    /// <summary>
+    /// Connection limit reached, implement backoff or close other connections.
+    /// </summary>
+    [JsonPropertyName("CONNECTION_LIMIT")]
+    ConnectionLimit,
+
+    /// <summary>
+    /// Streaming service unavailable, fall back to polling.
+    /// </summary>
+    [JsonPropertyName("STREAMING_UNAVAILABLE")]
+    StreamingUnavailable
+}
+
+/// <summary>
+/// SSE error event data structure.
+/// </summary>
+public record StreamErrorData
+{
+    /// <summary>
+    /// The error code indicating the type of error.
+    /// </summary>
+    [JsonPropertyName("code")]
+    public required string Code { get; init; }
+
+    /// <summary>
+    /// Human-readable error message.
+    /// </summary>
+    [JsonPropertyName("message")]
+    public required string Message { get; init; }
 }
 
 /// <summary>
@@ -99,6 +156,8 @@ public class StreamingManager : IDisposable, IAsyncDisposable
     private readonly Action<string> _onFlagDelete;
     private readonly Action<List<FlagState>> _onFlagsReset;
     private readonly Action _onFallbackToPolling;
+    private readonly Action<string>? _onSubscriptionError;
+    private readonly Action? _onConnectionLimitError;
 
     private readonly HttpClient _httpClient;
     private readonly CancellationTokenSource _disposalCts = new();
@@ -129,6 +188,8 @@ public class StreamingManager : IDisposable, IAsyncDisposable
     /// <param name="onFlagDelete">Callback when a flag is deleted.</param>
     /// <param name="onFlagsReset">Callback when all flags are reset.</param>
     /// <param name="onFallbackToPolling">Callback when streaming fails and falls back to polling.</param>
+    /// <param name="onSubscriptionError">Callback when subscription error occurs (e.g., suspended).</param>
+    /// <param name="onConnectionLimitError">Callback when connection limit is reached.</param>
     public StreamingManager(
         string baseUrl,
         Func<string> getApiKey,
@@ -136,7 +197,9 @@ public class StreamingManager : IDisposable, IAsyncDisposable
         Action<FlagState> onFlagUpdate,
         Action<string> onFlagDelete,
         Action<List<FlagState>> onFlagsReset,
-        Action onFallbackToPolling)
+        Action onFallbackToPolling,
+        Action<string>? onSubscriptionError = null,
+        Action? onConnectionLimitError = null)
     {
         _baseUrl = baseUrl;
         _getApiKey = getApiKey;
@@ -145,6 +208,8 @@ public class StreamingManager : IDisposable, IAsyncDisposable
         _onFlagDelete = onFlagDelete;
         _onFlagsReset = onFlagsReset;
         _onFallbackToPolling = onFallbackToPolling;
+        _onSubscriptionError = onSubscriptionError;
+        _onConnectionLimitError = onConnectionLimitError;
 
         _httpClient = new HttpClient
         {
@@ -405,11 +470,93 @@ public class StreamingManager : IDisposable, IAsyncDisposable
                 case "heartbeat":
                     HandleHeartbeat();
                     break;
+
+                case "error":
+                    HandleStreamError(data);
+                    break;
             }
         }
         catch
         {
             // Failed to parse event, ignore
+        }
+    }
+
+    /// <summary>
+    /// Handle SSE error event from server.
+    /// These are application-level errors sent as SSE events, not connection errors.
+    ///
+    /// Error codes:
+    /// - TOKEN_INVALID: Re-authenticate completely
+    /// - TOKEN_EXPIRED: Refresh token and reconnect
+    /// - SUBSCRIPTION_SUSPENDED: Notify user, fall back to cached values
+    /// - CONNECTION_LIMIT: Implement backoff or close other connections
+    /// - STREAMING_UNAVAILABLE: Fall back to polling
+    /// </summary>
+    /// <param name="data">The JSON error data from the SSE event.</param>
+    private void HandleStreamError(string data)
+    {
+        try
+        {
+            var errorData = JsonSerializer.Deserialize<StreamErrorData>(data, JsonOptions);
+            if (errorData == null)
+            {
+                return;
+            }
+
+            Console.WriteLine($"[FlagKit] SSE error event received: {errorData.Code} - {errorData.Message}");
+
+            switch (errorData.Code.ToUpperInvariant())
+            {
+                case "TOKEN_EXPIRED":
+                    // Token expired, refresh and reconnect
+                    Console.WriteLine("[FlagKit] Stream token expired, refreshing...");
+                    Cleanup();
+                    Connect(); // Will fetch new token
+                    break;
+
+                case "TOKEN_INVALID":
+                    // Token is invalid, need full re-authentication
+                    Console.WriteLine("[FlagKit] Stream token invalid, re-authenticating...");
+                    Cleanup();
+                    Connect(); // Will fetch new token
+                    break;
+
+                case "SUBSCRIPTION_SUSPENDED":
+                    // Subscription issue - notify and fall back
+                    Console.WriteLine($"[FlagKit] Subscription suspended: {errorData.Message}");
+                    _onSubscriptionError?.Invoke(errorData.Message);
+                    Cleanup();
+                    SetState(StreamingState.Failed);
+                    _onFallbackToPolling();
+                    break;
+
+                case "CONNECTION_LIMIT":
+                    // Too many connections - implement backoff
+                    Console.WriteLine("[FlagKit] Connection limit reached, backing off...");
+                    _onConnectionLimitError?.Invoke();
+                    HandleConnectionFailure();
+                    break;
+
+                case "STREAMING_UNAVAILABLE":
+                    // Streaming not available - fall back to polling
+                    Console.WriteLine("[FlagKit] Streaming service unavailable, falling back to polling");
+                    Cleanup();
+                    SetState(StreamingState.Failed);
+                    _onFallbackToPolling();
+                    break;
+
+                default:
+                    Console.WriteLine($"[FlagKit] Unknown stream error code: {errorData.Code}");
+                    HandleConnectionFailure();
+                    break;
+            }
+        }
+        catch
+        {
+            // Failed to parse error data, treat as connection failure
+            Console.WriteLine("[FlagKit] Failed to parse stream error data");
+            HandleConnectionFailure();
         }
     }
 
