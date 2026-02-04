@@ -1,5 +1,6 @@
 using FlagKit.Core;
 using FlagKit.Errors;
+using FlagKit.Http;
 using System.Security;
 
 namespace FlagKit;
@@ -225,6 +226,22 @@ public record FlagKitOptions
     /// </summary>
     public StreamingConfig Streaming { get; init; } = new();
 
+    /// <summary>
+    /// Callback for usage metrics updates from API responses.
+    /// Called when usage headers are present in the response.
+    /// </summary>
+    public Action<UsageMetrics>? OnUsageUpdate { get; init; }
+
+    /// <summary>
+    /// Callback when subscription error occurs during streaming (e.g., suspended).
+    /// </summary>
+    public Action<string>? OnSubscriptionError { get; init; }
+
+    /// <summary>
+    /// Callback when connection limit is reached during streaming.
+    /// </summary>
+    public Action? OnConnectionLimitError { get; init; }
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(ApiKey))
@@ -293,6 +310,9 @@ public record FlagKitOptions
         private ErrorSanitizationConfig _errorSanitization = new();
         private bool _streamingEnabled = true;
         private StreamingConfig _streaming = new();
+        private Action<UsageMetrics>? _onUsageUpdate;
+        private Action<string>? _onSubscriptionError;
+        private Action? _onConnectionLimitError;
 
         public Builder(string apiKey) => _apiKey = apiKey;
 
@@ -322,6 +342,9 @@ public record FlagKitOptions
         public Builder ErrorSanitization(ErrorSanitizationConfig config) { _errorSanitization = config; return this; }
         public Builder StreamingEnabled(bool enabled) { _streamingEnabled = enabled; return this; }
         public Builder Streaming(StreamingConfig config) { _streaming = config; return this; }
+        public Builder OnUsageUpdate(Action<UsageMetrics> callback) { _onUsageUpdate = callback; return this; }
+        public Builder OnSubscriptionError(Action<string> callback) { _onSubscriptionError = callback; return this; }
+        public Builder OnConnectionLimitError(Action callback) { _onConnectionLimitError = callback; return this; }
 
         public FlagKitOptions Build() => new()
         {
@@ -351,7 +374,10 @@ public record FlagKitOptions
             BootstrapVerification = _bootstrapVerification,
             ErrorSanitization = _errorSanitization,
             StreamingEnabled = _streamingEnabled,
-            Streaming = _streaming
+            Streaming = _streaming,
+            OnUsageUpdate = _onUsageUpdate,
+            OnSubscriptionError = _onSubscriptionError,
+            OnConnectionLimitError = _onConnectionLimitError
         };
     }
 
