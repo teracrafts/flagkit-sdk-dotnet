@@ -46,6 +46,11 @@ public class FlagKitHttpClient : IDisposable
 {
     internal const string DefaultBaseUrl = "https://api.flagkit.dev/api/v1";
 
+    /// <summary>
+    /// SDK version string for version comparison and headers.
+    /// </summary>
+    public static readonly string SdkVersion = GetVersion();
+
     private static readonly string[] ValidSubscriptionStatuses = { "active", "trial", "past_due", "suspended", "cancelled" };
 
     private readonly HttpClient _httpClient;
