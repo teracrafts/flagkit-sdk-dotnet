@@ -9,6 +9,36 @@ using FlagKit.Utils;
 namespace FlagKit;
 
 /// <summary>
+/// SDK version metadata from server.
+/// </summary>
+public record SdkVersionMetadata
+{
+    /// <summary>
+    /// Minimum SDK version required (older versions may not work).
+    /// </summary>
+    [JsonPropertyName("sdkVersionMin")]
+    public string? SdkVersionMin { get; init; }
+
+    /// <summary>
+    /// Recommended SDK version for optimal experience.
+    /// </summary>
+    [JsonPropertyName("sdkVersionRecommended")]
+    public string? SdkVersionRecommended { get; init; }
+
+    /// <summary>
+    /// Latest available SDK version.
+    /// </summary>
+    [JsonPropertyName("sdkVersionLatest")]
+    public string? SdkVersionLatest { get; init; }
+
+    /// <summary>
+    /// Deprecation warning message from server.
+    /// </summary>
+    [JsonPropertyName("deprecationWarning")]
+    public string? DeprecationWarning { get; init; }
+}
+
+/// <summary>
 /// Response from SDK init endpoint.
 /// </summary>
 public record InitResponse
@@ -30,6 +60,12 @@ public record InitResponse
 
     [JsonPropertyName("projectId")]
     public string? ProjectId { get; init; }
+
+    /// <summary>
+    /// SDK version metadata from server.
+    /// </summary>
+    [JsonPropertyName("metadata")]
+    public SdkVersionMetadata? Metadata { get; init; }
 }
 
 /// <summary>
@@ -269,6 +305,9 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
                 {
                     _lastServerTime = serverTime;
                 }
+
+                // Check SDK version metadata and emit warnings
+                CheckVersionMetadata(response);
 
                 Volatile.Write(ref _initialized, true);
                 _readyTcs?.TrySetResult(true);
@@ -914,6 +953,62 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
             _options.EvaluationJitter.MinMs,
             _options.EvaluationJitter.MaxMs + 1);
         Thread.Sleep(jitterMs);
+    }
+
+    /// <summary>
+    /// Check SDK version metadata from init response and emit appropriate warnings.
+    /// Per spec, the SDK should parse and surface:
+    /// - sdkVersionMin: Minimum required version (older may not work)
+    /// - sdkVersionRecommended: Recommended version for optimal experience
+    /// - sdkVersionLatest: Latest available version
+    /// - deprecationWarning: Server-provided deprecation message
+    /// </summary>
+    /// <param name="response">The init response containing version metadata.</param>
+    private void CheckVersionMetadata(InitResponse response)
+    {
+        var metadata = response.Metadata;
+        if (metadata == null)
+        {
+            return;
+        }
+
+        var currentVersion = Http.FlagKitHttpClient.SdkVersion;
+
+        // Check for server-provided deprecation warning first
+        if (!string.IsNullOrEmpty(metadata.DeprecationWarning))
+        {
+            Console.WriteLine($"[FlagKit] WARNING: Deprecation Warning: {metadata.DeprecationWarning}");
+        }
+
+        // Check minimum version requirement
+        if (!string.IsNullOrEmpty(metadata.SdkVersionMin) &&
+            VersionUtils.IsVersionLessThan(currentVersion, metadata.SdkVersionMin))
+        {
+            Console.WriteLine(
+                $"[FlagKit] ERROR: SDK version {currentVersion} is below minimum required version {metadata.SdkVersionMin}. " +
+                "Some features may not work correctly. Please upgrade the SDK.");
+        }
+
+        // Check recommended version
+        var warnedAboutRecommended = false;
+        if (!string.IsNullOrEmpty(metadata.SdkVersionRecommended) &&
+            VersionUtils.IsVersionLessThan(currentVersion, metadata.SdkVersionRecommended))
+        {
+            Console.WriteLine(
+                $"[FlagKit] WARNING: SDK version {currentVersion} is below recommended version {metadata.SdkVersionRecommended}. " +
+                "Consider upgrading for the best experience.");
+            warnedAboutRecommended = true;
+        }
+
+        // Log if a newer version is available (info level, not a warning)
+        // Only log if we haven't already warned about recommended version
+        if (!warnedAboutRecommended &&
+            !string.IsNullOrEmpty(metadata.SdkVersionLatest) &&
+            VersionUtils.IsVersionLessThan(currentVersion, metadata.SdkVersionLatest))
+        {
+            Console.WriteLine(
+                $"[FlagKit] INFO: SDK version {currentVersion} - a newer version {metadata.SdkVersionLatest} is available.");
+        }
     }
 
     /// <summary>
