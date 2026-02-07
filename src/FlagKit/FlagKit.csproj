@@ -6,14 +6,14 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
 
-    <PackageId>FlagKit</PackageId>
+    <PackageId>Teracrafts.FlagKit</PackageId>
     <Version>1.0.0</Version>
     <Authors>FlagKit</Authors>
     <Company>FlagKit</Company>
     <Description>Official .NET SDK for FlagKit feature flag management</Description>
     <PackageTags>feature-flags;feature-toggles;flagkit</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/flagkit/flagkit-dotnet</RepositoryUrl>
+    <RepositoryUrl>https://github.com/teracrafts/flagkit-sdk</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
