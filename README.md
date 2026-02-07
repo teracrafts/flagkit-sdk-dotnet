@@ -9,7 +9,7 @@ Official .NET SDK for [FlagKit](https://flagkit.dev) feature flag service.
 ## Installation
 
 ```bash
-dotnet add package FlagKit
+dotnet add package Teracrafts.FlagKit
 ```
 
 ## Features
