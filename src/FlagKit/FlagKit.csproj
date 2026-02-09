@@ -7,7 +7,7 @@
     <LangVersion>latest</LangVersion>
 
     <PackageId>Teracrafts.FlagKit</PackageId>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Authors>FlagKit</Authors>
     <Company>FlagKit</Company>
     <Description>Official .NET SDK for FlagKit feature flag management</Description>
