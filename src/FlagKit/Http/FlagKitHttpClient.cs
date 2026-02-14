@@ -45,6 +45,8 @@ public delegate void UsageUpdateCallback(UsageMetrics metrics);
 public class FlagKitHttpClient : IDisposable
 {
     internal const string DefaultBaseUrl = "https://api.flagkit.dev/api/v1";
+    internal const string BetaBaseUrl = "https://api.beta.flagkit.dev/api/v1";
+    internal const string LocalBaseUrl = "https://api.flagkit.on/api/v1";
 
     /// <summary>
     /// SDK version string for version comparison and headers.
@@ -69,10 +71,18 @@ public class FlagKitHttpClient : IDisposable
     };
 
     /// <summary>
-    /// Returns the base URL for the given local port, or the default production URL.
+    /// Returns the base URL based on internal SDK mode.
     /// </summary>
-    public static string GetBaseUrl(int? localPort) =>
-        localPort.HasValue ? $"http://localhost:{localPort.Value}/api/v1" : DefaultBaseUrl;
+    public static string GetBaseUrl()
+    {
+        var mode = (Environment.GetEnvironmentVariable("FLAGKIT_MODE") ?? string.Empty).Trim().ToLowerInvariant();
+        return mode switch
+        {
+            "local" => LocalBaseUrl,
+            "beta" => BetaBaseUrl,
+            _ => DefaultBaseUrl
+        };
+    }
 
     public FlagKitHttpClient(FlagKitOptions options)
     {
@@ -83,7 +93,7 @@ public class FlagKitHttpClient : IDisposable
 
         _httpClient = new HttpClient
         {
-            BaseAddress = new Uri(GetBaseUrl(options.LocalPort)),
+            BaseAddress = new Uri(GetBaseUrl()),
             Timeout = options.Timeout
         };
 
