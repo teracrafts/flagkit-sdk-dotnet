@@ -137,6 +137,63 @@ public class FlagKitOptionsTests
         Assert.Equal(FlagKitOptions.DefaultRetryAttempts, options.RetryAttempts);
     }
 
+    #region Base URL Tests
+
+    [Fact]
+    public void GetBaseUrl_Returns_Production_Url_By_Default()
+    {
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", null);
+        var url = Http.FlagKitHttpClient.GetBaseUrl();
+        Assert.Equal("https://api.flagkit.dev/api/v1", url);
+    }
+
+    [Fact]
+    public void GetBaseUrl_Returns_Local_Url_When_Mode_Is_Local()
+    {
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", "local");
+        var url = Http.FlagKitHttpClient.GetBaseUrl();
+        Assert.Equal("https://api.flagkit.on/api/v1", url);
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", null);
+    }
+
+    [Fact]
+    public void GetBaseUrl_Returns_Beta_Url_When_Mode_Is_Beta()
+    {
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", "beta");
+        var url = Http.FlagKitHttpClient.GetBaseUrl();
+        Assert.Equal("https://api.beta.flagkit.dev/api/v1", url);
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", null);
+    }
+
+    [Fact]
+    public void GetBaseUrl_Is_Case_Insensitive()
+    {
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", "LOCAL");
+        var url = Http.FlagKitHttpClient.GetBaseUrl();
+        Assert.Equal("https://api.flagkit.on/api/v1", url);
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", null);
+    }
+
+    [Fact]
+    public void GetBaseUrl_Trims_Whitespace()
+    {
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", " local ");
+        var url = Http.FlagKitHttpClient.GetBaseUrl();
+        Assert.Equal("https://api.flagkit.on/api/v1", url);
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", null);
+    }
+
+    [Fact]
+    public void GetBaseUrl_Falls_Through_For_Unknown_Mode()
+    {
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", "staging");
+        var url = Http.FlagKitHttpClient.GetBaseUrl();
+        Assert.Equal("https://api.flagkit.dev/api/v1", url);
+        Environment.SetEnvironmentVariable("FLAGKIT_MODE", null);
+    }
+
+    #endregion
+
     #region Security Options Tests
 
     [Fact]
@@ -178,90 +235,6 @@ public class FlagKitOptionsTests
 
         Assert.Equal(ErrorCode.ConfigInvalidApiKey, ex.Code);
         Assert.Contains("secondary", ex.Message.ToLower());
-    }
-
-    [Fact]
-    public void LocalPort_In_Production_Throws_SecurityException()
-    {
-        // Save original environment
-        var originalEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
-
-        try
-        {
-            // Set production environment
-            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Production");
-
-            var options = new FlagKitOptions
-            {
-                ApiKey = "sdk_test123",
-                LocalPort = 8080
-            };
-
-            var ex = Assert.Throws<SecurityException>(() => options.Validate());
-
-            Assert.Contains("LocalPort cannot be used in Production", ex.Message);
-        }
-        finally
-        {
-            // Restore original environment
-            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", originalEnv);
-        }
-    }
-
-    [Fact]
-    public void LocalPort_In_Development_Does_Not_Throw()
-    {
-        // Save original environment
-        var originalEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
-
-        try
-        {
-            // Set development environment
-            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");
-
-            var options = new FlagKitOptions
-            {
-                ApiKey = "sdk_test123",
-                LocalPort = 8080
-            };
-
-            var exception = Record.Exception(() => options.Validate());
-
-            Assert.Null(exception);
-        }
-        finally
-        {
-            // Restore original environment
-            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", originalEnv);
-        }
-    }
-
-    [Fact]
-    public void LocalPort_WithNoEnvironment_Does_Not_Throw()
-    {
-        // Save original environment
-        var originalEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
-
-        try
-        {
-            // Clear environment variable
-            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", null);
-
-            var options = new FlagKitOptions
-            {
-                ApiKey = "sdk_test123",
-                LocalPort = 8080
-            };
-
-            var exception = Record.Exception(() => options.Validate());
-
-            Assert.Null(exception);
-        }
-        finally
-        {
-            // Restore original environment
-            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", originalEnv);
-        }
     }
 
     [Fact]
