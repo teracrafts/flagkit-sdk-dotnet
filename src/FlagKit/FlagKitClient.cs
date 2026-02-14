@@ -205,7 +205,7 @@ public class FlagKitClient : IDisposable, IAsyncDisposable
         // Initialize streaming if enabled
         if (options.StreamingEnabled)
         {
-            var baseUrl = FlagKitHttpClient.GetBaseUrl(options.LocalPort);
+            var baseUrl = FlagKitHttpClient.GetBaseUrl();
             _streamingManager = new StreamingManager(
                 baseUrl,
                 () => _httpClient.CurrentApiKey,
