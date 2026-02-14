@@ -127,10 +127,6 @@ public record FlagKitOptions
     public int CircuitBreakerThreshold { get; init; } = DefaultCircuitBreakerThreshold;
     public TimeSpan CircuitBreakerResetTimeout { get; init; } = DefaultCircuitBreakerResetTimeout;
     public Dictionary<string, object>? Bootstrap { get; init; }
-    /// <summary>
-    /// Local development server port. When set, uses http://localhost:{port}/api/v1.
-    /// </summary>
-    public int? LocalPort { get; init; }
 
     /// <summary>
     /// Secondary API key for automatic failover on 401 errors.
@@ -261,18 +257,6 @@ public record FlagKitOptions
         if (!string.IsNullOrWhiteSpace(SecondaryApiKey) && !validPrefixes.Any(p => SecondaryApiKey.StartsWith(p)))
             throw FlagKitException.ConfigError(ErrorCode.ConfigInvalidApiKey, "Invalid secondary API key format");
 
-        // Prevent LocalPort usage in production environment
-        if (LocalPort.HasValue)
-        {
-            var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
-            if (string.Equals(env, "Production", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new SecurityException(
-                    "LocalPort cannot be used in Production environment. " +
-                    "Set ASPNETCORE_ENVIRONMENT to a non-production value or remove LocalPort configuration.");
-            }
-        }
-
         // Validate event persistence options
         if (MaxPersistedEvents <= 0)
             throw FlagKitException.ConfigError(ErrorCode.ConfigInvalidPollingInterval, "MaxPersistedEvents must be positive");
@@ -294,7 +278,6 @@ public record FlagKitOptions
         private TimeSpan _timeout = DefaultTimeout;
         private int _retryAttempts = DefaultRetryAttempts;
         private Dictionary<string, object>? _bootstrap;
-        private int? _localPort;
         private string? _secondaryApiKey;
         private bool _strictPIIMode = false;
         private List<string>? _privateAttributes;
@@ -326,7 +309,6 @@ public record FlagKitOptions
         public Builder Timeout(TimeSpan timeout) { _timeout = timeout; return this; }
         public Builder RetryAttempts(int attempts) { _retryAttempts = attempts; return this; }
         public Builder Bootstrap(Dictionary<string, object> data) { _bootstrap = data; return this; }
-        public Builder LocalPort(int port) { _localPort = port; return this; }
         public Builder SecondaryApiKey(string key) { _secondaryApiKey = key; return this; }
         public Builder StrictPIIMode(bool enabled) { _strictPIIMode = enabled; return this; }
         public Builder PrivateAttributes(List<string> attributes) { _privateAttributes = attributes; return this; }
@@ -359,7 +341,6 @@ public record FlagKitOptions
             Timeout = _timeout,
             RetryAttempts = _retryAttempts,
             Bootstrap = _bootstrap,
-            LocalPort = _localPort,
             SecondaryApiKey = _secondaryApiKey,
             StrictPIIMode = _strictPIIMode,
             PrivateAttributes = _privateAttributes,
